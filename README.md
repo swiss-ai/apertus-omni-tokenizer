@@ -43,8 +43,8 @@ create_instruct_tokenizer("./omni_vision_audio", "swiss-ai/Apertus-8B-2509-Instr
 [base .. base+199]      200 reserved OMNI slots
   slot 0                  boundary marker (never renamed)
   slots 1-7               vision structure tokens
-  slots 8-14              audio structure tokens
-  slots 15-199            reserved for future modalities
+  slots 8-15              audio structure tokens
+  slots 16-199            reserved for future modalities
 [base+200 .. ]          content tokens (appended per modality in order added)
 ```
 
@@ -54,8 +54,8 @@ create_instruct_tokenizer("./omni_vision_audio", "swiss-ai/Apertus-8B-2509-Instr
 |-------|----------|--------|
 | 0 | -- | `<\|RESERVED_OMNI_000\|>` (boundary) |
 | 1-7 | Vision | img_start, img_end, img_token_start, img_end_of_row, img_end_of_frame, img_generation_start, image |
-| 8-14 | Audio | audio_start, audio_end, stt_transcribe, stt_continue, tts_synthesize, tts_continue, audio |
-| 15-199 | -- | Reserved |
+| 8-15 | Audio | audio_start, audio_end, stt_transcribe, stt_continue, tts_continue, audio, stt_translate, audio_annotate |
+| 16-199 | -- | Reserved |
 
 ## Token aliases
 
@@ -82,8 +82,10 @@ apertus-omni-tokenizer/
 │   ├── io.py            # low-level file I/O (rename, alias, detect, save)
 │   └── cli.py           # CLI wrapper (python -m omnitok.cli)
 └── tests/
-    ├── conftest.py      # shared fixtures
-    └── test_alias.py    # token alias tests (<image> == <|image|>)
+    ├── conftest.py          # shared fixtures
+    ├── test_alias.py        # token alias tests (<image> == <|image|>)
+    ├── test_builder.py      # add_modality tests
+    └── test_task_tokens.py  # task token contract tests
 ```
 
 Adding a new modality = one new `ModalityConfig` entry in `modalities.py`.
