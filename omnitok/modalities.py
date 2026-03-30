@@ -37,8 +37,8 @@ class ModalityConfig:
 #  Slot allocation:
 #    0       boundary marker (never renamed)
 #    1-7     vision
-#    8-14    audio
-#    15-199  reserved for future modalities
+#    8-15    audio
+#    16-199  reserved for future modalities
 
 VISION = ModalityConfig(
     name="vision",
@@ -74,9 +74,10 @@ AUDIO = ModalityConfig(
         TokenRename(9, "<|audio_end|>"),
         TokenRename(10, "<|stt_transcribe|>"),
         TokenRename(11, "<|stt_continue|>"),
-        TokenRename(12, "<|tts_synthesize|>"),
-        TokenRename(13, "<|tts_continue|>"),
-        TokenRename(14, "<|audio|>", alias="<audio>"),
+        TokenRename(12, "<|tts_continue|>"),
+        TokenRename(13, "<|audio|>", alias="<audio>"),
+        TokenRename(14, "<|stt_translate|>"),
+        TokenRename(15, "<|audio_annotate|>"),
     ),
 )
 

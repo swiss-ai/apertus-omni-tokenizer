@@ -152,7 +152,7 @@ class TestErrors:
             add_modality(BASE_TOKENIZER, str(tmp_path / "out"), "video", 32)
 
     def test_slot_validation(self, tmp_path):
-        # Audio uses slot 14, so num_reserved_tokens=5 should fail
+        # Audio uses slot 13, so num_reserved_tokens=5 should fail
         with pytest.raises(ValueError, match="too small"):
             add_modality(
                 BASE_TOKENIZER,
