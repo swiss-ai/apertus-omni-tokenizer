@@ -17,6 +17,119 @@ from .io import detect_existing_modalities
 from .modalities import MODALITY_REGISTRY
 
 
+_LLAMA_MULTIMODAL_RENDERER = """{%- macro render_content(content) -%}
+    {%- if content is string -%}
+        {{- content | trim -}}
+    {%- elif content is sequence -%}
+        {%- for item in content -%}
+            {%- if item is string -%}
+                {{- item | trim -}}
+            {%- elif item is mapping -%}
+                {%- if item.type == "text" -%}
+                    {{- item.text | trim -}}
+                {%- elif item.type == "image" or item.type == "image_url" or item.type == "input_image" -%}
+                    {{- "<|image|>" -}}
+                {%- elif item.type == "audio" or item.type == "audio_url" or item.type == "input_audio" -%}
+                    {{- "<|audio|>" -}}
+                {%- else -%}
+                    {{- raise_exception("Invalid content item: " + item.type) -}}
+                {%- endif -%}
+            {%- else -%}
+                {{- raise_exception("Invalid content item") -}}
+            {%- endif -%}
+            {%- if not loop.last -%}
+                {{- "\\n" -}}
+            {%- endif -%}
+        {%- endfor -%}
+    {%- else -%}
+        {{- raise_exception("Invalid message content") -}}
+    {%- endif -%}
+{%- endmacro -%}"""
+
+
+def _patch_llama_chat_template(chat_template: str) -> str:
+    """Teach LLaMA-style templates to render structured image/audio blocks."""
+    if "macro render_content(content)" in chat_template:
+        return chat_template
+
+    replacements = (
+        ("messages[0]['content']|trim", "render_content(messages[0]['content'])"),
+        ("messages[0]['content'] | trim", "render_content(messages[0]['content'])"),
+        ('messages[0]["content"]|trim', 'render_content(messages[0]["content"])'),
+        ('messages[0]["content"] | trim', 'render_content(messages[0]["content"])'),
+        ("message['content']|trim", "render_content(message['content'])"),
+        ("message['content'] | trim", "render_content(message['content'])"),
+        ('message["content"]|trim', 'render_content(message["content"])'),
+        ('message["content"] | trim', 'render_content(message["content"])'),
+    )
+
+    patched = chat_template
+    replaced = False
+    for old, new in replacements:
+        if old in patched:
+            patched = patched.replace(old, new)
+            replaced = True
+
+    if not replaced:
+        return chat_template
+
+    return _LLAMA_MULTIMODAL_RENDERER + "\n\n" + patched
+
+
+_APERTUS_OMNI_SYSTEM_PROMPT = (
+    "You are Apertus 1.5 Omni, a multimodal assistant developed by the "
+    "Swiss AI Initiative. Extended from Apertus 1 via continued "
+    "pretraining, you understand images and audio and respond in text."
+)
+
+
+def _patch_apertus_chat_template(chat_template: str) -> str:
+    """Extend Apertus chat template for omni SFT.
+
+    - Adds audio rendering to user content parts.
+    - Replaces the default no-system-message fallback with a static
+      omni-aware system prompt. Drops the dynamic ``strftime_now`` call
+      and the stale ``Knowledge cutoff`` line so that samples without an
+      explicit system message render deterministically across training
+      runs. Explicit system messages in data are still honored.
+    """
+    if "audio_token = '<|audio|>'" in chat_template:
+        return chat_template
+
+    patched = chat_template
+    image_token_line = "{%- set image_token = '<|image|>' -%}"
+    if image_token_line in patched:
+        patched = patched.replace(
+            image_token_line,
+            image_token_line + "\n{%- set audio_token = '<|audio|>' -%}",
+            1,
+        )
+
+    image_branch = """{%- elif part.type == "image" -%}
+                        {{ image_token }}
+                    {%- else -%}
+                        {{- raise_exception("Invalid user part: " + part.type) -}}
+                    {%- endif -%}"""
+    audio_branch = """{%- elif part.type == "image" or part.type == "image_url" or part.type == "input_image" -%}
+                        {{ image_token }}
+                    {%- elif part.type == "audio" or part.type == "audio_url" or part.type == "input_audio" -%}
+                        {{ audio_token }}
+                    {%- else -%}
+                        {{- raise_exception("Invalid user part: " + part.type) -}}
+                    {%- endif -%}"""
+    patched = patched.replace(image_branch, audio_branch, 1)
+
+    old_default_expr = (
+        "'You are Apertus, a helpful assistant created by the SwissAI "
+        "initiative.\\nKnowledge cutoff: 2024-04\\nCurrent date: ' "
+        "+ strftime_now('%Y-%m-%d')"
+    )
+    new_default_expr = "'" + _APERTUS_OMNI_SYSTEM_PROMPT + "'"
+    patched = patched.replace(old_default_expr, new_default_expr, 1)
+
+    return patched
+
+
 def create_instruct_tokenizer(
     base_tokenizer_path: str,
     instruct_tokenizer_path: str,
@@ -68,8 +181,6 @@ def create_instruct_tokenizer(
     with open(config_path, "r") as f:
         config = json.load(f)
 
-    config["chat_template"] = chat_template
-
     stats = {
         "base_tokenizer": base_tokenizer_path,
         "instruct_tokenizer": instruct_tokenizer_path,
@@ -79,11 +190,13 @@ def create_instruct_tokenizer(
 
     # Detect chat template style and add SFT sequences
     if "<|start_header_id|>" in chat_template:
+        chat_template = _patch_llama_chat_template(chat_template)
         user_header = "<|start_header_id|>user<|end_header_id|>"
         assistant_header = "<|start_header_id|>assistant<|end_header_id|>"
         eot_token = "<|eot_id|>"
         print("Detected LLaMA-3 style chat template")
     elif "<|user_start|>" in chat_template:
+        chat_template = _patch_apertus_chat_template(chat_template)
         user_header = "<|user_start|>"
         assistant_header = "<|assistant_start|>"
         eot_token = "<|assistant_end|>"
@@ -92,6 +205,8 @@ def create_instruct_tokenizer(
         raise ValueError(
             "Unsupported chat template. Supported: LLaMA-3, Apertus."
         )
+
+    config["chat_template"] = chat_template
 
     config["sft_user_begin_sequence"] = tokenizer.encode(
         user_header, add_special_tokens=False
