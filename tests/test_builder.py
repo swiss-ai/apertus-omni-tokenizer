@@ -184,6 +184,41 @@ class TestReturnedTokenizer:
         assert stats["content_tokens_added"] == SMALL_VOCAB
         assert stats["final_vocab_size"] > stats["original_vocab_size"]
 
+    def test_returned_tokenizer_resave_preserves_omnimodal_config(self, tmp_path):
+        out = str(tmp_path / "fresh")
+        resave = str(tmp_path / "fresh_resave")
+        tok, _ = add_modality(BASE_TOKENIZER, out, "vision", SMALL_VOCAB)
+
+        assert "omnimodal_config" in tok.init_kwargs
+
+        tok.save_pretrained(resave)
+        with open(os.path.join(resave, "tokenizer_config.json")) as f:
+            config = json.load(f)
+        assert "omnimodal_config" in config
+
+    def test_skip_path_returned_tokenizer_resave_preserves_omnimodal_config(
+        self, tmp_path
+    ):
+        out = str(tmp_path / "idem")
+        resave = str(tmp_path / "idem_resave")
+        add_modality(BASE_TOKENIZER, out, "vision", SMALL_VOCAB)
+
+        config_path = os.path.join(out, "tokenizer_config.json")
+        with open(config_path) as f:
+            config = json.load(f)
+        config.pop("omnimodal_config", None)
+        with open(config_path, "w") as f:
+            json.dump(config, f, indent=2)
+
+        tok, _ = add_modality(out, out, "vision", SMALL_VOCAB)
+
+        assert "omnimodal_config" in tok.init_kwargs
+
+        tok.save_pretrained(resave)
+        with open(os.path.join(resave, "tokenizer_config.json")) as f:
+            config = json.load(f)
+        assert "omnimodal_config" in config
+
 
 # ── Extra config ─────────────────────────────────────────────────────────────
 

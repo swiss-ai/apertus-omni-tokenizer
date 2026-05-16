@@ -15,11 +15,12 @@ from transformers import AutoTokenizer
 
 from .io import (
     add_token_alias,
+    build_omnimodal_config,
     copy_modality_mapping_files,
     detect_existing_modalities,
     rename_reserved_token,
     save_tokenizer,
-    update_omnimodal_config,
+    write_tokenizer_config,
 )
 from .modalities import MODALITY_REGISTRY, ModalityConfig
 
@@ -96,8 +97,17 @@ def add_modality(
         print(f"\n{mc.name} tokens already exist. Skipping.")
         tokenizer.save_pretrained(output_path)
         copy_modality_mapping_files(existing, input_tokenizer_path, output_path)
-        update_omnimodal_config(output_path, base_vocab_size)
+        omnimodal_config = build_omnimodal_config(
+            output_path, base_vocab_size, tokenizer
+        )
+        write_tokenizer_config(
+            output_path,
+            tokenizer,
+            base_vocab_size,
+            omnimodal_config=omnimodal_config,
+        )
         stats["final_vocab_size"] = current_vocab_size
+        tokenizer = AutoTokenizer.from_pretrained(output_path, use_fast=True)
         return tokenizer, stats
 
     # Validate num_reserved_tokens covers all claimed slots
@@ -149,19 +159,31 @@ def add_modality(
         old = f"<|RESERVED_OMNI_{rename.reserved_index:03d}|>"
         rename_reserved_token(output_path, tokenizer, old, rename.target_name)
 
-    # Apply aliases
-    for rename in mc.structure_tokens:
-        if rename.alias:
-            add_token_alias(output_path, rename.target_name, rename.alias)
-
-    # Update omnimodal_config
-    update_omnimodal_config(output_path, base_vocab_size)
-
-    # Reload from disk so returned tokenizer has renames + aliases applied
+    # Reload so returned tokenizer has renames applied.
     tokenizer = AutoTokenizer.from_pretrained(output_path, use_fast=True)
 
-    # Save mapping (after reload so structure token IDs resolve correctly)
+    # Batch alias mutations in-memory, then save once.
+    aliases = [r for r in mc.structure_tokens if r.alias]
+    for rename in aliases:
+        add_token_alias(output_path, rename.target_name, rename.alias,
+                        tokenizer=tokenizer, save=False)
+    if aliases:
+        tokenizer.save_pretrained(output_path)
+
+    # Mapping must be written before omnimodal_config is rebuilt from disk.
     _save_modality_mapping(output_path, mc, tokenizer, vocab_size, stats)
+    omnimodal_config = build_omnimodal_config(output_path, base_vocab_size, tokenizer)
+    write_tokenizer_config(
+        output_path,
+        tokenizer,
+        base_vocab_size,
+        extra_config=extra_config,
+        config_section_name=mc.config_section_name,
+        omnimodal_config=omnimodal_config,
+    )
+
+    # Reload after all file mutations so the returned tokenizer matches disk.
+    tokenizer = AutoTokenizer.from_pretrained(output_path, use_fast=True)
 
     # Verification
     _print_verification(tokenizer, mc, vocab_size)

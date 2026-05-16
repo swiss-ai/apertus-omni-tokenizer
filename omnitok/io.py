@@ -23,11 +23,12 @@ original text-only size (e.g. 131072).  Always use ``len(tokenizer)`` or
 
 Call flow (driven by builder.add_modality):
 
-    save_tokenizer()              # save HF tokenizer + write vocab metadata
+    save_tokenizer()              # save HF tokenizer + write base metadata
     copy_modality_mapping_files() # preserve existing mapping JSONs when stacking
     rename_reserved_token()       # e.g. <|RESERVED_OMNI_001|> -> <|img_start|>
     add_token_alias()             # e.g. <image> encodes to same ID as <|image|>
-    update_omnimodal_config()     # rebuild omnimodal_config in tokenizer_config.json
+    build_omnimodal_config()      # derive omnimodal metadata from mapping files
+    write_tokenizer_config()      # write all custom tokenizer_config.json fields
 """
 
 from __future__ import annotations
@@ -123,7 +124,13 @@ def rename_reserved_token(
     print(f"  Renamed {old_token} -> {new_token} (ID {token_id})")
 
 
-def add_token_alias(save_path: str, token: str, alias: str) -> None:
+def add_token_alias(
+    save_path: str,
+    token: str,
+    alias: str,
+    tokenizer: AutoTokenizer | None = None,
+    save: bool = True,
+) -> None:
     """Make ``alias`` encode to the same token ID as ``token``.
 
     Prepends a normalizers.Replace(alias, token) to the tokenizer's
@@ -131,26 +138,75 @@ def add_token_alias(save_path: str, token: str, alias: str) -> None:
     AddedToken(normalized=True) so the matcher checks normalized input
     (where the alias has already been rewritten).
 
+    This eliminates the need for manual .replace("<image>", "<|image|>")
+    calls in data loaders and conversation transforms.
+
+    If ``tokenizer`` is provided, modifies it in-memory instead of
+    loading from ``save_path``.  Set ``save=False`` to skip the
+    save_pretrained call (useful when batching multiple aliases).
+
     Example::
 
         add_token_alias(path, "<|image|>", "<image>")
         # Now tokenizer.encode("<image>") == tokenizer.encode("<|image|>")
-
-    This eliminates the need for manual .replace("<image>", "<|image|>")
-    calls in data loaders and conversation transforms.
     """
-    tok = AutoTokenizer.from_pretrained(save_path)
+    tok = tokenizer if tokenizer is not None else AutoTokenizer.from_pretrained(save_path)
     backend = tok.backend_tokenizer
     replace = normalizers.Replace(alias, token)
     existing = backend.normalizer
     backend.normalizer = (
         normalizers.Sequence([replace, existing]) if existing else replace
     )
-    tok.save_pretrained(save_path)
+    if save:
+        tok.save_pretrained(save_path)
     print(f"  Added alias {alias} -> {token}")
 
 
 # ── Tokenizer config ─────────────────────────────────────────────────────────
+
+
+def write_tokenizer_config(
+    save_path: str,
+    tokenizer,
+    base_vocab_size: int,
+    *,
+    extra_config: dict[str, Any] | None = None,
+    config_section_name: str | None = None,
+    omnimodal_config: dict[str, Any] | None = None,
+) -> None:
+    """Write derived/custom fields into ``tokenizer_config.json``.
+
+    Hugging Face's ``save_pretrained()`` cannot faithfully persist this
+    project's custom metadata on its own:
+
+    - ``vocab_size`` gets overwritten with the base-model vocab size
+      because ``tokenizer.vocab_size`` excludes added tokens.
+    - ``base_vocab_size`` and ``added_tokens_count`` are project-specific.
+    - ``omnimodal_config`` is derived from mapping JSONs written outside
+      the tokenizer object itself.
+
+    This helper centralizes those post-save corrections in one place.
+    """
+    config_path = os.path.join(save_path, "tokenizer_config.json")
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = json.load(f)
+
+    actual_vocab_size = len(tokenizer.get_vocab())
+    config["vocab_size"] = actual_vocab_size
+    config["base_vocab_size"] = config.get("base_vocab_size", base_vocab_size)
+    config["added_tokens_count"] = actual_vocab_size - base_vocab_size
+
+    if extra_config and config_section_name:
+        config[config_section_name] = extra_config
+
+    if omnimodal_config is not None:
+        if omnimodal_config:
+            config["omnimodal_config"] = omnimodal_config
+        else:
+            config.pop("omnimodal_config", None)
+
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
 
 
 def save_tokenizer(
@@ -160,7 +216,7 @@ def save_tokenizer(
     extra_config: dict[str, Any] | None = None,
     config_section_name: str | None = None,
 ) -> None:
-    """Save tokenizer to disk and write vocab metadata to tokenizer_config.json.
+    """Save tokenizer to disk and write base metadata to tokenizer_config.json.
 
     Writes to tokenizer_config.json:
         vocab_size:         total size (text + reserved + content)
@@ -172,23 +228,13 @@ def save_tokenizer(
     """
     os.makedirs(save_path, exist_ok=True)
     tokenizer.save_pretrained(save_path)
-
-    actual_vocab_size = len(tokenizer.get_vocab())
-
-    config_path = os.path.join(save_path, "tokenizer_config.json")
-    with open(config_path, "r") as f:
-        config = json.load(f)
-
-    config["vocab_size"] = actual_vocab_size
-    if "base_vocab_size" not in config:
-        config["base_vocab_size"] = base_vocab_size
-    config["added_tokens_count"] = actual_vocab_size - base_vocab_size
-
-    if extra_config and config_section_name:
-        config[config_section_name] = extra_config
-
-    with open(config_path, "w") as f:
-        json.dump(config, f, indent=2)
+    write_tokenizer_config(
+        save_path,
+        tokenizer,
+        base_vocab_size,
+        extra_config=extra_config,
+        config_section_name=config_section_name,
+    )
 
 
 # ── Modality detection ────────────────────────────────────────────────────────
@@ -341,34 +387,6 @@ def build_omnimodal_config(
         "omni_special_token_offset": base_vocab_size,
         "modalities": modalities,
     }
-
-
-def update_omnimodal_config(
-    output_path: str,
-    base_vocab_size: int,
-    registry: dict[str, ModalityConfig] | None = None,
-) -> None:
-    """Rebuild omnimodal_config and write it to tokenizer_config.json.
-
-    Reloads the tokenizer from disk (to pick up renames), rebuilds the
-    config via build_omnimodal_config(), and writes back. Called at the
-    end of builder.add_modality() after all tokens are finalized.
-    """
-    config_path = os.path.join(output_path, "tokenizer_config.json")
-    if not os.path.exists(config_path):
-        return
-
-    tokenizer = AutoTokenizer.from_pretrained(output_path, use_fast=True)
-    omnimodal_config = build_omnimodal_config(
-        output_path, base_vocab_size, tokenizer, registry
-    )
-
-    if omnimodal_config:
-        with open(config_path, "r") as f:
-            config = json.load(f)
-        config["omnimodal_config"] = omnimodal_config
-        with open(config_path, "w") as f:
-            json.dump(config, f, indent=2)
 
 
 # ── Mapping utilities ─────────────────────────────────────────────────────────
