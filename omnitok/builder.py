@@ -131,11 +131,16 @@ def add_modality(
     stats["content_tokens_added"] = len(content)
     print(f"\nAdding {len(reserved)} reserved + {len(content):,} content tokens...")
 
-    # Add all tokens
-    all_tokens = reserved + content
-    num_added = tokenizer.add_special_tokens(
-        {"additional_special_tokens": all_tokens}
-    )
+    # Add reserved tokens to additional_special_tokens so structure/task tokens
+    # stay in tokenizer_config.json after they are renamed. Content codebook
+    # tokens should be special for decoding, but not config convenience entries.
+    num_added = 0
+    if reserved:
+        num_added += tokenizer.add_special_tokens(
+            {"additional_special_tokens": reserved}
+        )
+    if content:
+        num_added += tokenizer.add_tokens(content, special_tokens=True)
     print(f"Added {num_added:,} new tokens")
 
     stats["final_vocab_size"] = len(tokenizer)
