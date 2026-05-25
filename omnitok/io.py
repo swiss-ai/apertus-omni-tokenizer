@@ -439,10 +439,22 @@ def get_content_token_id(
     if mapping is None:
         mapping = load_modality_mapping(tokenizer_path, modality_name)
     mc = MODALITY_REGISTRY[modality_name]
+
+    vocab_size = mapping.get(mc.vocab_size_key)
+    if vocab_size is not None and not 0 <= index < vocab_size:
+        raise ValueError(
+            f"{modality_name} index {index} out of range. "
+            f"Valid range: 0-{vocab_size - 1}"
+        )
+
     token_ids = mapping.get(f"{mc.name}_token_ids", {})
     key = str(index)
     if key in token_ids:
         return token_ids[key]
+
+    if mc.offset_key in mapping:
+        return mapping[mc.offset_key] + index
+
     raise ValueError(
         f"{modality_name} index {index} not found. "
         f"Valid range: 0-{mapping.get(mc.vocab_size_key, '?')}"

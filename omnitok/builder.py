@@ -260,10 +260,7 @@ def _save_modality_mapping(
     stats: dict[str, Any],
 ) -> None:
     """Save the modality's token mapping JSON."""
-    mapping = {}
-    for i in range(vocab_size):
-        token = mc.content_token_format.format(i=i)
-        mapping[i] = tokenizer.convert_tokens_to_ids(token)
+    offset = tokenizer.convert_tokens_to_ids(mc.content_token_format.format(i=0))
 
     structure_tokens = {}
     for rename in mc.structure_tokens:
@@ -273,10 +270,9 @@ def _save_modality_mapping(
     data = {
         mc.vocab_size_key: vocab_size,
         f"{mc.name}_token_format": mc.content_token_format.replace("{i}", "N"),
-        mc.offset_key: mapping[0],
+        mc.offset_key: offset,
         "vocab_size": stats["final_vocab_size"],
         "structure_tokens": structure_tokens,
-        f"{mc.name}_token_ids": mapping,
     }
 
     mapping_path = os.path.join(output_path, mc.mapping_file)
