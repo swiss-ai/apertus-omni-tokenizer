@@ -74,6 +74,7 @@ create_instruct_tokenizer("./omni_vision_audio", "swiss-ai/Apertus-8B-2509-Instr
 ```
 apertus-omni-tokenizer/
 ├── README.md
+├── pyproject.toml
 ├── omnitok/
 │   ├── __init__.py      # public API exports
 │   ├── modalities.py    # ModalityConfig dataclass, built-in VISION/AUDIO configs
@@ -82,16 +83,17 @@ apertus-omni-tokenizer/
 │   ├── io.py            # low-level file I/O (rename, alias, detect, save)
 │   └── cli.py           # CLI wrapper (python -m omnitok.cli)
 └── tests/
-│   ├── conftest.py          # shared fixtures
-│   ├── test_alias.py        # token alias tests (<image> == <|image|>)
-│   ├── test_builder.py      # add_modality tests
-│   └── test_task_tokens.py  # task token contract tests
+│   ├── conftest.py           # shared fixtures
+│   ├── test_alias.py         # token alias tests (<image> == <|image|>)
+│   ├── test_builder.py       # add_modality tests
+│   ├── test_chat_template.py # add chat template test
+│   └── test_task_tokens.py   # task token contract tests
 └── examples/
 │   └── rename_tool_tokens.py # Script used to add new special tokens in tool calling parsing
 └── chat_templates/
-    ├── Apertus_1 # Chat template used for Apertus 1.0 
+    ├── Apertus_1     # Chat template used for Apertus 1.0 
     │   └── chat_template.jinja
-    └── Apertus_1p5 # Chat template used for Apertus 1.5
+    └── Apertus_1p5   # Chat template used for Apertus 1.5
         └── chat_template.jinja
 ```
 
