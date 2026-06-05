@@ -82,10 +82,17 @@ apertus-omni-tokenizer/
 │   ├── io.py            # low-level file I/O (rename, alias, detect, save)
 │   └── cli.py           # CLI wrapper (python -m omnitok.cli)
 └── tests/
-    ├── conftest.py          # shared fixtures
-    ├── test_alias.py        # token alias tests (<image> == <|image|>)
-    ├── test_builder.py      # add_modality tests
-    └── test_task_tokens.py  # task token contract tests
+│   ├── conftest.py          # shared fixtures
+│   ├── test_alias.py        # token alias tests (<image> == <|image|>)
+│   ├── test_builder.py      # add_modality tests
+│   └── test_task_tokens.py  # task token contract tests
+└── examples/
+│   └── rename_tool_tokens.py # Script used to add new special tokens in tool calling parsing
+└── chat_templaes/
+    ├── Apertus_1 # Chat template used for Apertus 1.0 
+    │   └── chat_template.jinja
+    └── Apertus_1p5 # Chat template used for Apertus 1.5
+        └── chat_template.jinja
 ```
 
 Adding a new modality = one new `ModalityConfig` entry in `modalities.py`.
