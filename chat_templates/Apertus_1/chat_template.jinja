@@ -94,6 +94,7 @@
         {{- "any" }}
     {%- endif -%}
 {%- endmacro -%}
+
 {%- macro render_tools(tools) -%}
     {%- for tool in tools %}
         {{- "// " + tool.description + "\n" }}
@@ -134,7 +135,9 @@
         {%- endif -%}
     {%- endfor %}
 {%- endmacro -%}
+
 {{ bos_token }}
+
 {%- set system_token = '<|system_start|>' -%}
 {%- set end_system_token = '<|system_end|>' -%}
 {%- set developer_token = '<|developer_start|>' -%}
@@ -148,7 +151,9 @@
 {%- set tool_calls_token = '<|tools_prefix|>' -%}
 {%- set end_tool_calls_token = '<|tools_suffix|>' -%}
 {%- set image_token = '<|image|>' -%}
+
 {%- set ns = namespace(in_assistant=false, in_tool=false, in_inner=false, waiting_for_tool_outputs=false, assistant_format=none) -%}
+
 {%- if messages and messages[0].role == 'system' -%}
     {%- if "content" in messages[0] -%}
         {%- if messages[0].content is string -%}
@@ -166,6 +171,7 @@
     {{ system_token + 'You are Apertus, a helpful assistant created by the SwissAI initiative.\nKnowledge cutoff: 2024-04\nCurrent date: ' + strftime_now('%Y-%m-%d') + end_system_token }}
     {%- set loop_messages = messages -%}
 {%- endif -%}
+
 {{ developer_token + 'Deliberation: ' }}
 {%- if enable_thinking is defined and enable_thinking -%}
     {{ 'enabled\n' }}
@@ -178,6 +184,7 @@
     {{ 'Tool Capabilities: disabled' }}
 {%- endif -%}
 {{ end_developer_token }}
+
 {%- for message in loop_messages -%}
     {%- if message.role == 'user' -%}
         {%- set ns.in_inner = false -%}
