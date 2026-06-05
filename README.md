@@ -88,7 +88,7 @@ apertus-omni-tokenizer/
 │   └── test_task_tokens.py  # task token contract tests
 └── examples/
 │   └── rename_tool_tokens.py # Script used to add new special tokens in tool calling parsing
-└── chat_templaes/
+└── chat_templates/
     ├── Apertus_1 # Chat template used for Apertus 1.0 
     │   └── chat_template.jinja
     └── Apertus_1p5 # Chat template used for Apertus 1.5
