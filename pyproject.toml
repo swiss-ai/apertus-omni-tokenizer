@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "omnitok"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = [
+    "transformers",
+    "tokenizers",
+    "huggingface_hub",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "jinja2",
+    "djlint",
+]
+
+[tool.setuptools.packages.find]
+include = ["omnitok*"]
