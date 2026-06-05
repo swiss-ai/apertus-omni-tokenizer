@@ -2,8 +2,12 @@ name: CI
 
 on:
   pull_request:
+    paths:
+      - "chat_templates/**"
   push:
     branches: [main]
+    paths:
+      - "chat_templates/**"
 
 jobs:
   lint-jinja:
