@@ -17,6 +17,7 @@ import os
 
 import jinja2
 import pytest
+from _pytest.outcomes import Failed
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import Whitespace
@@ -76,10 +77,16 @@ def test_at_least_one_jinja_file_present():
 
 @pytest.mark.parametrize("path", _jinja_files(), ids=_rel)
 def test_jinja_syntax_is_valid(path):
-    """jinja2 must parse the file without a syntax error."""
+    """jinja2 must compile the file without error.
+
+    compile() is stricter than parse(): besides grammar it resolves filters and
+    raises TemplateAssertionError (a TemplateSyntaxError subclass) on an unknown
+    one, e.g. a typo'd ``|jion``. Function calls (strftime_now, raise_exception)
+    are not compile-checked, so the real templates still pass.
+    """
     source = open(path, encoding="utf-8").read()
     try:
-        jinja2.Environment().parse(source)
+        jinja2.Environment().compile(source)
     except jinja2.TemplateSyntaxError as exc:
         pytest.fail(f"{_rel(path)}: syntax error on line {exc.lineno}: {exc.message}")
 
@@ -184,3 +191,64 @@ def test_template_multi_turn_all_turns_present(path):
     ])
     for marker in ["TURN_1_USER", "TURN_1_ASSISTANT", "TURN_2_USER", "TURN_2_ASSISTANT"]:
         assert marker in rendered, f"{marker} missing from multi-turn render"
+
+
+# ---------------------------------------------------------------------------
+# Meta-tests: guard the guards.
+#
+# Deliberately broken templates (tests/examples/) are fed through the SAME
+# checks the suite runs on real templates; each check must report a failure. If
+# someone weakens a check so it passes everything, the matching meta-test below
+# starts failing. These live under tests/ (not chat_templates/) so the
+# parametrized suite above never picks them up.
+# ---------------------------------------------------------------------------
+
+_EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "examples")
+
+
+def _example(name: str) -> str:
+    return os.path.join(_EXAMPLES_DIR, name)
+
+
+def test_meta_good_example_passes_the_checks():
+    """Sanity check: the unbroken baseline example passes the real checks, so a
+    failure below is attributable to the breakage and not to the baseline."""
+    path = _example("good_chat_template.jinja")
+    test_jinja_syntax_is_valid(path)
+    test_template_contains_role_delimiters(path)
+    test_template_preserves_user_content(path)
+    test_template_user_content_inside_user_delimiters(path)
+
+
+def test_meta_broken_syntax_is_reported():
+    """broken_syntax.jinja (an unterminated tag) must trip the syntax check."""
+    # test_jinja_syntax_is_valid calls pytest.fail() on a syntax error.
+    with pytest.raises(Failed):
+        test_jinja_syntax_is_valid(_example("broken_syntax.jinja"))
+
+
+def test_meta_unknown_filter_is_reported():
+    """bad_filter.jinja (a typo'd ``|jion``) must trip the syntax check via
+    compile(); plain parse() would let it through. Locks in the stricter check."""
+    with pytest.raises(Failed):
+        test_jinja_syntax_is_valid(_example("bad_filter.jinja"))
+
+
+def test_meta_corrupted_delimiters_are_reported():
+    """corrupted_delimiters.jinja (the djlint --reformat failure mode: a stray
+    space inside every special token) must be caught by the delimiter and
+    content-placement checks."""
+    path = _example("corrupted_delimiters.jinja")
+    with pytest.raises(AssertionError):
+        test_template_contains_role_delimiters(path)
+    # Content-placement check locates the token with str.index, which raises
+    # ValueError when the (now corrupted) token is absent.
+    with pytest.raises((AssertionError, ValueError)):
+        test_template_user_content_inside_user_delimiters(path)
+
+
+def test_meta_dropped_user_content_is_reported():
+    """dropped_user_content.jinja (discards the user message) must fail content
+    preservation."""
+    with pytest.raises(AssertionError):
+        test_template_preserves_user_content(_example("dropped_user_content.jinja"))

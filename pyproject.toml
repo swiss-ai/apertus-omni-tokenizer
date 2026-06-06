@@ -16,7 +16,6 @@ dependencies = [
 dev = [
     "pytest",
     "jinja2",
-    "djlint",
 ]
 
 [tool.setuptools.packages.find]

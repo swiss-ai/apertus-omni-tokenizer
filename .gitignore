@@ -3,6 +3,10 @@ __pycache__/
 .pytest_cache/
 .hypothesis/
 
+# Virtualenvs / build artifacts
+.venv/
+*.egg-info/
+
 # Local tool artifacts
 .claude/
 .codex

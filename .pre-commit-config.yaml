@@ -1,0 +1,14 @@
+# Whitespace hygiene for chat-template Jinja files.
+# Byte-level only -- these hooks never parse/reformat Jinja, so they cannot
+# corrupt the <|...|> special tokens (unlike djlint --reformat).
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        files: \.jinja$
+      - id: end-of-file-fixer
+        files: \.jinja$
+      - id: mixed-line-ending
+        args: [--fix=lf]
+        files: \.jinja$

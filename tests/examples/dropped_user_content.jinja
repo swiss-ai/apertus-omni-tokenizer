@@ -1,0 +1,12 @@
+{# Emits the user delimiters but discards `message.content`, so the user's     #}
+{# text never reaches the rendered prompt -> content-preservation must fail.    #}
+{{ bos_token }}<|system_start|>You are a test assistant.<|system_end|>
+{%- for message in messages -%}
+    {%- if message.role == 'system' -%}
+        <|system_start|>{{ message.content }}<|system_end|>
+    {%- elif message.role == 'user' -%}
+        <|user_start|><|user_end|>
+    {%- elif message.role == 'assistant' -%}
+        <|assistant_start|>{{ message.content }}<|assistant_end|>
+    {%- endif -%}
+{%- endfor -%}
