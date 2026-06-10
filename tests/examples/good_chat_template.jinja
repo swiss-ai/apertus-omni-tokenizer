@@ -1,0 +1,10 @@
+{{ bos_token }}<|system_start|>You are a test assistant.<|system_end|>
+{%- for message in messages -%}
+    {%- if message.role == 'system' -%}
+        <|system_start|>{{ message.content }}<|system_end|>
+    {%- elif message.role == 'user' -%}
+        <|user_start|>{{ message.content }}<|user_end|>
+    {%- elif message.role == 'assistant' -%}
+        <|assistant_start|>{{ message.content }}<|assistant_end|>
+    {%- endif -%}
+{%- endfor -%}

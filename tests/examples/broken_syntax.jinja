@@ -1,0 +1,5 @@
+{{ bos_token }}<|system_start|>You are a test assistant.<|system_end|>
+{# `for x in` has no iterable -> Jinja cannot parse this template. #}
+{%- for x in -%}
+    {{ x }}
+{%- endfor -%}

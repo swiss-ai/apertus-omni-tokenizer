@@ -1,0 +1,3 @@
+{# `jion` is a typo for the builtin `join` filter. Grammar is valid, so        #}
+{# parse() accepts it; compile() resolves filters and rejects the unknown name. #}
+{{ bos_token }}<|user_start|>{{ ["a", "b"] | jion(", ") }}<|user_end|>

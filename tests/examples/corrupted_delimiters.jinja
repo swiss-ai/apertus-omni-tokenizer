@@ -1,0 +1,13 @@
+{# The djlint --reformat failure mode: a stray space inside every special    #}
+{# token (`<|user_start|>` -> `<| user_start|>`) so the delimiters no longer   #}
+{# match. Syntactically valid Jinja, but the rendered tokens are wrong.        #}
+{{ bos_token }}<| system_start|>You are a test assistant.<| system_end|>
+{%- for message in messages -%}
+    {%- if message.role == 'system' -%}
+        <| system_start|>{{ message.content }}<| system_end|>
+    {%- elif message.role == 'user' -%}
+        <| user_start|>{{ message.content }}<| user_end|>
+    {%- elif message.role == 'assistant' -%}
+        <| assistant_start|>{{ message.content }}<| assistant_end|>
+    {%- endif -%}
+{%- endfor -%}
