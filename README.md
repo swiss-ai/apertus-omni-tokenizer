@@ -1,8 +1,8 @@
 # omnitok
 
-Extend Apertus / LLaMA-3 text tokenizers with vision and audio modality tokens.
+This package documents the chat templates and core tokenizers used in Apertus, and provides utilities for extending LLaMA-3/Apertus text tokenizers with additional vision and audio modalities.
 
-## Usage
+## Extension Scripts
 
 ```bash
 # Add vision
@@ -82,18 +82,25 @@ apertus-omni-tokenizer/
 │   ├── instruct.py      # create_instruct_tokenizer() -- chat template + SFT sequences
 │   ├── io.py            # low-level file I/O (rename, alias, detect, save)
 │   └── cli.py           # CLI wrapper (python -m omnitok.cli)
-└── tests/
+├── tests/
 │   ├── conftest.py           # shared fixtures
 │   ├── test_alias.py         # token alias tests (<image> == <|image|>)
 │   ├── test_builder.py       # add_modality tests
 │   ├── test_chat_template.py # add chat template test
 │   └── test_task_tokens.py   # task token contract tests
-└── examples/
+├── examples/
 │   └── rename_tool_tokens.py # Script used to add new special tokens in tool calling parsing
+├── tokenizers/
+│   ├── Apertus_1/            # Instructed tokenizer used for Apertus 1.0
+│   │   ├── tokenizer.json
+│   │   └── tokenizer_config.json
+│   └── Apertus_1p5/          # Instructed tokenizer used for Apertus 1.5
+│       ├── tokenizer.json
+│       └── tokenizer_config.json
 └── chat_templates/
-    ├── Apertus_1     # Chat template used for Apertus 1.0 
+    ├── Apertus_1/            # Chat template used for Apertus 1.0
     │   └── chat_template.jinja
-    └── Apertus_1p5   # Chat template used for Apertus 1.5
+    └── Apertus_1p5/          # Chat template used for Apertus 1.5
         └── chat_template.jinja
 ```
 
