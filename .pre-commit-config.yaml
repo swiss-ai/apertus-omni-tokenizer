@@ -1,6 +1,12 @@
 # Whitespace hygiene for chat-template Jinja files.
 # Byte-level only -- these hooks never parse/reformat Jinja, so they cannot
 # corrupt the <|...|> special tokens (unlike djlint --reformat).
+#
+# Tokenizer JSON is intentionally NOT touched by the mutating hooks below:
+# those files are generated verbatim by transformers (e.g. tokenizer.json has
+# no trailing newline) and validate_model.sh compares their md5 against real
+# exports -- rewriting whitespace would break that. JSON only gets check-json,
+# which is read-only.
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
@@ -12,3 +18,6 @@ repos:
       - id: mixed-line-ending
         args: [--fix=lf]
         files: \.jinja$
+      # Parse-only validity gate for tokenizer JSON (does not rewrite files).
+      - id: check-json
+        files: \.json$
