@@ -9,6 +9,9 @@ repos:
         files: \.(jinja|json)$
       - id: end-of-file-fixer
         files: \.(jinja|json)$
+        # tokenizer.json is exported by transformers WITHOUT a trailing newline;
+        # keep it byte-identical to real exports so validate_model.sh md5s match.
+        exclude: (^|/)tokenizer\.json$
       - id: mixed-line-ending
         args: [--fix=lf]
         files: \.(jinja|json)$
