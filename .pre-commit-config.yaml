@@ -1,4 +1,4 @@
-# Whitespace hygiene for chat-template Jinja files.
+# Whitespace hygiene for chat-template Jinja files and tokenizer JSON.
 # Byte-level only -- these hooks never parse/reformat Jinja, so they cannot
 # corrupt the <|...|> special tokens (unlike djlint --reformat).
 repos:
@@ -6,9 +6,15 @@ repos:
     rev: v5.0.0
     hooks:
       - id: trailing-whitespace
-        files: \.jinja$
+        files: \.(jinja|json)$
       - id: end-of-file-fixer
-        files: \.jinja$
+        files: \.(jinja|json)$
+        # tokenizer.json is exported by transformers WITHOUT a trailing newline;
+        # keep it byte-identical to real exports so validate_model.sh md5s match.
+        exclude: (^|/)tokenizer\.json$
       - id: mixed-line-ending
         args: [--fix=lf]
-        files: \.jinja$
+        files: \.(jinja|json)$
+      # Parse-only validity gate for tokenizer JSON (does not rewrite files).
+      - id: check-json
+        files: \.json$
