@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Validate that a deployed model directory ships the canonical Apertus tokenizer.
 #
-# Usage (remote, the common case):
+# Usage (remote, the common case): cd into the model dir, then validate it
+#   cd /path/to/model
 #   curl -fsSL https://raw.githubusercontent.com/swiss-ai/apertus-omni-tokenizer/main/validate_model.sh \
-#     | bash -s -- [MODEL_PATH] [MODEL_NAME]
+#     | bash
+#   (defaults to validating the current directory against Apertus_1p5)
 #
 # Usage (local checkout):
 #   bash validate_model.sh [MODEL_PATH] [MODEL_NAME]

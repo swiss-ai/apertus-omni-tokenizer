@@ -77,9 +77,13 @@ It compares md5 checksums against the manifests under `validation/` and exits
 non-zero on any mismatch.
 
 ```bash
-# Remote (no checkout needed). BRANCH defaults to main.
+# Remote (no checkout needed): cd into the model dir, then validate it
+cd /path/to/served/model
 curl -fsSL https://raw.githubusercontent.com/swiss-ai/apertus-omni-tokenizer/main/validate_model.sh \
-  | bash -s -- /path/to/served/model
+  | bash
+
+# To validate the 1.0 tokenizer instead, pass the path slot + model name
+#   | bash -s -- . Apertus_1
 
 # From a local checkout
 bash validate_model.sh /path/to/served/model
