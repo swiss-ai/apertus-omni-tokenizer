@@ -61,6 +61,65 @@ create_instruct_tokenizer("./omni_vision_audio", "swiss-ai/Apertus-8B-2509-Instr
 
 `<image>` and `<|image|>` encode to the same token ID. Same for `<audio>` / `<|audio|>`. Handled by the tokenizer's normalizer -- no manual `.replace()` needed in data loaders.
 
+## In-place mode (reuse a pre-baked reserved pool)
+
+The default `add-modality` **appends** a 200-slot `RESERVED_OMNI` block on top of the
+base vocab (the layout above). Some base tokenizers instead **pre-bake** the special
+tokens *inside* their vocab — e.g. the 200k multilingual tokenizer ships `<|image|>`,
+`<|audio|>`, and a free reserve pool `<SPECIAL_27>`…`<SPECIAL_123>`. For those, use
+`--allocation in_place`: existing tokens are **reused**, structure tokens are
+**renamed from the pool**, and only the content (codebook) tokens are appended.
+
+```bash
+# vision: reuse <|image|>; rename <SPECIAL_27..32> -> img_start..img_generation_start; append content
+python -m omnitok.cli add-modality --allocation in_place \
+    --input-tokenizer ./preliminary_mul_200k --output-path ./omni_vision \
+    --modality vision --vocab-size 131072
+
+# stack audio: reuse <|audio|>; rename the next free <SPECIAL_*> slots; append content
+python -m omnitok.cli add-modality --allocation in_place \
+    --input-tokenizer ./omni_vision --output-path ./omni_vision_audio \
+    --modality audio --vocab-size 4096
+
+# preview only -- resolve + print the change report, write nothing
+python -m omnitok.cli add-modality --allocation in_place --dry-run \
+    --input-tokenizer ./preliminary_mul_200k --output-path ./omni_vision \
+    --modality vision --vocab-size 131072
+```
+
+```python
+from omnitok import add_modality
+add_modality("./preliminary_mul_200k", "./omni_vision", "vision", 131072, allocation="in_place")
+add_modality("./omni_vision", "./omni_vision_audio", "audio", 4096, allocation="in_place")
+```
+
+Layout (content appends after the base vocab; structure tokens stay in place):
+
+```
+[0 .. base-1]   text + pre-baked specials, incl. <|image|>, <|audio|>, <SPECIAL_*> pool
+  reused          <|image|>, <|audio|>            (kept at their existing ids)
+  renamed         img_start..img_generation_start <- <SPECIAL_27..32>
+                  audio_start..audio_annotate     <- <SPECIAL_33..39>
+[base .. ]      content tokens (appended per modality in order added)
+```
+
+Flags:
+
+- `--allocation {append,in_place}` (default `append`).
+- `--slot-assignments '{"<|img_start|>": 40}'` — pin a structure token to a pool
+  **ordinal** (the N in `<SPECIAL_N>`) instead of auto-filling the lowest free slot.
+- `--allow-existing` / `--no-allow-existing` (default allow) — always skip tokens that
+  already exist; `--no-allow-existing` errors on any *unexpected* pre-existing token
+  (declared-reuse tokens like `<|image|>` are exempt).
+- `--dry-run` — print the full change report (reused, renames, aliases, content id
+  range) without writing any files.
+
+In-place `omnimodal_config` gains `allocation: "in_place"`, the claimed reserve-pool
+range (`omni_special_token_offset` + `omni_special_token_count`), an authoritative
+`omni_special_token_ids` union, and per-modality `special_region_offset` /
+`special_region_count` / `reused_special_ids` / `structure_token_ids`. Under scattered
+`--slot-assignments`, treat `omni_special_token_ids` as authoritative.
+
 ## Known codebook sizes
 
 | Tokenizer | Modality | Codebook Size |
