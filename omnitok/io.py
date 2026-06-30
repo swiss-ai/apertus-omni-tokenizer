@@ -29,6 +29,14 @@ Call flow (driven by builder.add_modality):
     add_token_alias()             # e.g. <image> encodes to same ID as <|image|>
     build_omnimodal_config()      # derive omnimodal metadata from mapping files
     write_tokenizer_config()      # write all custom tokenizer_config.json fields
+
+In-place mode (allocation="in_place", for tokenizers that pre-bake specials inside
+the base vocab, e.g. <SPECIAL_27>.. plus reused <|image|>/<|audio|>): no reserved
+block is appended; rename_reserved_token() repurposes the pre-baked <SPECIAL_n>
+slots, and flip_token_normalized() is called AFTER the final save to make reused
+alias targets (<|image|>/<|audio|>) normalized=True. build_omnimodal_config(
+allocation="in_place") emits a kept omni_special_token_offset + an explicit
+range/id-union (see that function).
 """
 
 from __future__ import annotations
@@ -152,14 +160,70 @@ def add_token_alias(
     """
     tok = tokenizer if tokenizer is not None else AutoTokenizer.from_pretrained(save_path)
     backend = tok.backend_tokenizer
-    replace = normalizers.Replace(alias, token)
     existing = backend.normalizer
+    # Idempotency: if the alias already normalizes to the target, a Replace rule
+    # is present -- don't stack a duplicate (which would nest Sequences and break
+    # byte-stability on re-runs).
+    if existing is not None and existing.normalize_str(alias) == token:
+        print(f"  Alias {alias} -> {token} already present, skipping")
+        return
+    replace = normalizers.Replace(alias, token)
     backend.normalizer = (
         normalizers.Sequence([replace, existing]) if existing else replace
     )
     if save:
         tok.save_pretrained(save_path)
     print(f"  Added alias {alias} -> {token}")
+
+
+def flip_token_normalized(save_path: str, token_name: str, value: bool = True) -> bool:
+    """Set the ``normalized`` flag of an existing added token, on disk, in both files.
+
+    Edits BOTH ``tokenizer.json`` (the ``added_tokens`` array entry whose content
+    matches ``token_name``) AND ``tokenizer_config.json`` (the matching
+    ``added_tokens_decoder`` entry). Both must agree or the alias normalizer trick
+    is non-deterministic: ``save_pretrained`` reconstructs ``tokenizer.json`` from
+    ``added_tokens_decoder``, so a one-file flip reverts on the next save/reload.
+
+    Call this AFTER the final ``save_pretrained`` so it is not overwritten.
+
+    Used in in-place mode for a reused pre-baked alias target created
+    ``normalized=False`` (see ``add_token_alias`` for why the alias needs it).
+
+    Returns True if anything changed (useful for idempotency).
+    """
+    changed = False
+
+    tokenizer_json_path = os.path.join(save_path, "tokenizer.json")
+    if os.path.exists(tokenizer_json_path):
+        with open(tokenizer_json_path, "r", encoding="utf-8") as f:
+            tj = json.load(f)
+        for entry in tj.get("added_tokens", []):
+            if entry.get("content") == token_name and entry.get("normalized") != value:
+                entry["normalized"] = value
+                changed = True
+        if changed:
+            with open(tokenizer_json_path, "w", encoding="utf-8") as f:
+                json.dump(tj, f, ensure_ascii=False, indent=2)
+
+    config_path = os.path.join(save_path, "tokenizer_config.json")
+    if os.path.exists(config_path):
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+        decoder = config.get("added_tokens_decoder", {})
+        cfg_changed = False
+        for entry in decoder.values():
+            if entry.get("content") == token_name and entry.get("normalized") != value:
+                entry["normalized"] = value
+                cfg_changed = True
+        if cfg_changed:
+            with open(config_path, "w", encoding="utf-8") as f:
+                json.dump(config, f, indent=2)
+            changed = True
+
+    if changed:
+        print(f"  Set normalized={value} for {token_name}")
+    return changed
 
 
 # ── Tokenizer config ─────────────────────────────────────────────────────────
@@ -316,21 +380,29 @@ def copy_modality_mapping_files(
 # ── Omnimodal config ──────────────────────────────────────────────────────────
 
 
+def _load_mapping(output_path: str, mc: ModalityConfig) -> dict[str, Any] | None:
+    """Parse a modality's mapping JSON, or None if the file does not exist."""
+    mapping_path = os.path.join(output_path, mc.mapping_file)
+    if not os.path.exists(mapping_path):
+        return None
+    with open(mapping_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
 def read_modality_info(
-    output_path: str, mc: ModalityConfig, tokenizer
+    output_path: str, mc: ModalityConfig, tokenizer, data: dict | None = None
 ) -> dict[str, Any] | None:
     """Read a single modality's summary from its mapping file.
 
     Returns {name, offset, vocab_size, start_token, end_token} or None
     if the mapping file is missing or the structure tokens are not in
-    the vocabulary yet.
+    the vocabulary yet. Pass ``data`` (the already-parsed mapping JSON) to skip
+    re-reading the file.
     """
-    mapping_path = os.path.join(output_path, mc.mapping_file)
-    if not os.path.exists(mapping_path):
-        return None
-
-    with open(mapping_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    if data is None:
+        data = _load_mapping(output_path, mc)
+        if data is None:
+            return None
 
     if mc.offset_key not in data:
         return None
@@ -349,16 +421,28 @@ def read_modality_info(
     }
 
 
+def _extract_inplace_region(data: dict[str, Any]) -> dict[str, Any]:
+    """Pull the per-modality in-place keys (structure ids, claimed reserve-pool
+    region, reused out-of-pool ids) from a parsed mapping dict."""
+    return {
+        "structure_token_ids": data.get("structure_tokens", {}),
+        "special_region_offset": data.get("special_region_offset"),
+        "special_region_count": data.get("special_region_count"),
+        "reused_special_ids": data.get("reused_special_ids", []),
+    }
+
+
 def build_omnimodal_config(
     output_path: str,
     base_vocab_size: int,
     tokenizer,
     registry: dict[str, ModalityConfig] | None = None,
+    allocation: str = "append",
 ) -> dict[str, Any]:
     """Build omnimodal_config from all present modality mapping files.
 
-    Scans for each registered modality's mapping file, reads its summary,
-    and assembles them sorted by content token offset::
+    Append mode (default) -- structure tokens are a contiguous block at
+    ``base_vocab_size``::
 
         {
             "omni_special_token_offset": 131072,
@@ -368,23 +452,72 @@ def build_omnimodal_config(
             ]
         }
 
+    In-place mode -- structure tokens are scattered inside the base vocab (reused
+    pre-baked ids + a claimed reserve-pool region, contiguous only under the default
+    auto-allocation); content is appended::
+
+        {
+            "allocation": "in_place",
+            "omni_special_token_offset": 27,        # start of claimed pool
+            "omni_special_token_count": 13,         # contiguous pool slots claimed
+            "omni_special_token_ids": [18,19,27..39],   # authoritative union
+            "base_vocab_size": 200000,
+            "modalities": [{... + special_region_offset/count, reused_special_ids,
+                            structure_token_ids}, ...]
+        }
+
+    ``omni_special_token_count`` is the count of claimed pool slots; under explicit
+    ``slot_assignments`` they may be non-contiguous, so ``omni_special_token_ids`` and
+    the per-modality ``structure_token_ids`` are the authoritative id lists.
+
     Returns empty dict if no modalities are detected.
     """
     if registry is None:
         registry = MODALITY_REGISTRY
 
-    modalities = [
-        info
-        for mc in registry.values()
-        if (info := read_modality_info(output_path, mc, tokenizer)) is not None
-    ]
+    modalities = []
+    for mc in registry.values():
+        data = _load_mapping(output_path, mc)
+        if data is None:
+            continue
+        info = read_modality_info(output_path, mc, tokenizer, data=data)
+        if info is None:
+            continue
+        if allocation == "in_place":
+            info = {**info, **_extract_inplace_region(data)}
+        modalities.append(info)
 
     if not modalities:
         return {}
 
     modalities.sort(key=lambda m: m["offset"])
+
+    if allocation != "in_place":
+        return {
+            "omni_special_token_offset": base_vocab_size,
+            "modalities": modalities,
+        }
+
+    # In-place: derive the global special-token region from the per-modality data.
+    pool_offsets = [
+        m["special_region_offset"]
+        for m in modalities
+        if m.get("special_region_offset") is not None
+    ]
+    pool_count = sum(
+        m["special_region_count"] or 0
+        for m in modalities
+        if m.get("special_region_count") is not None
+    )
+    all_ids = sorted(
+        {i for m in modalities for i in (m.get("structure_token_ids") or {}).values()}
+    )
     return {
-        "omni_special_token_offset": base_vocab_size,
+        "allocation": "in_place",
+        "omni_special_token_offset": min(pool_offsets) if pool_offsets else base_vocab_size,
+        "omni_special_token_count": pool_count,
+        "omni_special_token_ids": all_ids,
+        "base_vocab_size": base_vocab_size,
         "modalities": modalities,
     }
 

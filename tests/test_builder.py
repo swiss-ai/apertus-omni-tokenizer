@@ -234,3 +234,35 @@ class TestExtraConfig:
             config = json.load(f)
         assert "vision_tokenizer" in config
         assert config["vision_tokenizer"]["type"] == "Emu3.5"
+
+
+# ── Append-mode stability (guards the in_place refactor) ─────────────────────
+
+
+class TestAppendModeUnchanged:
+    """The allocation='in_place' refactor must not alter append-mode output shape."""
+
+    def test_omnimodal_config_append_shape(self, stacked_tokenizer):
+        with open(os.path.join(stacked_tokenizer, "tokenizer_config.json")) as f:
+            config = json.load(f)
+        omc = config["omnimodal_config"]
+        # append: offset == base_vocab_size, and NO in_place-only keys leak in
+        assert omc["omni_special_token_offset"] == config["base_vocab_size"]
+        for key in ("allocation", "omni_special_token_count", "omni_special_token_ids"):
+            assert key not in omc, f"in_place key {key!r} leaked into append output"
+        for m in omc["modalities"]:
+            assert set(m) == {"name", "offset", "vocab_size", "start_token", "end_token"}
+
+    def test_structure_ids_are_base_plus_slot(self, vision_tokenizer):
+        tok = AutoTokenizer.from_pretrained(vision_tokenizer)
+        with open(os.path.join(vision_tokenizer, "tokenizer_config.json")) as f:
+            base = json.load(f)["base_vocab_size"]
+        for rename in VISION.structure_tokens:
+            assert tok.convert_tokens_to_ids(rename.target_name) == base + rename.reserved_index
+
+
+class TestVocabSizeGuard:
+    def test_zero_vocab_size_raises(self, tmp_path):
+        # Raises before any tokenizer load, so no network/base download needed.
+        with pytest.raises(ValueError, match="vocab_size must be"):
+            add_modality(BASE_TOKENIZER, str(tmp_path / "z"), "vision", 0)
