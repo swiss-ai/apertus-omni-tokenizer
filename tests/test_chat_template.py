@@ -194,6 +194,77 @@ def test_template_multi_turn_all_turns_present(path):
 
 
 # ---------------------------------------------------------------------------
+# Tool-call rendering: arguments may arrive as a JSON string (HF
+# apply_chat_template passes them through verbatim) or as an already-parsed dict
+# (vLLM json-parses tool_calls before rendering the prompt). The template must
+# render both. Regression test for issue #4: replaying a prior assistant tool
+# call under vLLM raised 'can only concatenate str (not "dict") to str'.
+# ---------------------------------------------------------------------------
+
+_APERTUS_1P5 = os.path.join(_TEMPLATES_DIR, "Apertus_1p5", "chat_template.jinja")
+
+
+def _weather_tools() -> list[dict]:
+    return [{
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get the weather for a city",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+            },
+        },
+    }]
+
+
+def _multi_turn_messages(arguments) -> list[dict]:
+    """A user→assistant(tool_call)→tool conversation, parametrized on the type
+    of the replayed ``arguments`` field (str for HF, dict for vLLM)."""
+    return [
+        {"role": "user", "content": "Weather in Zurich? Use the tool."},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": arguments},
+            }],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "14C light rain"},
+    ]
+
+
+def _render_with_tools(messages: list[dict]) -> str:
+    source = open(_APERTUS_1P5, encoding="utf-8").read()
+    tok = _make_tokenizer(source)
+    return tok.apply_chat_template(messages, tokenize=False, tools=_weather_tools())
+
+
+def test_tool_call_arguments_as_string_renders():
+    """HF path: arguments is a JSON string, passed through verbatim."""
+    rendered = _render_with_tools(_multi_turn_messages('{"city": "Zurich"}'))
+    assert '{"get_weather": {"city": "Zurich"}}' in rendered
+
+
+def test_tool_call_arguments_as_dict_renders():
+    """vLLM path: arguments is an already-parsed dict (issue #4 regression).
+
+    Before the fix this raised 'can only concatenate str (not "dict") to str'."""
+    rendered = _render_with_tools(_multi_turn_messages({"city": "Zurich"}))
+    assert '{"get_weather": {"city": "Zurich"}}' in rendered
+
+
+def test_tool_call_string_and_dict_args_render_identically():
+    """Both arg representations must produce the same prompt."""
+    as_string = _render_with_tools(_multi_turn_messages('{"city": "Zurich"}'))
+    as_dict = _render_with_tools(_multi_turn_messages({"city": "Zurich"}))
+    assert as_string == as_dict
+
+
+# ---------------------------------------------------------------------------
 # Meta-tests: guard the guards.
 #
 # Deliberately broken templates (tests/examples/) are fed through the SAME
