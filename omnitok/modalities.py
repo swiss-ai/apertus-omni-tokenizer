@@ -21,8 +21,9 @@ class TokenRename:
       no pool slot consumed.
     - ``"pool"`` (in-place mode): auto-allocate the next free reserve-pool slot
       (matching ``ModalityConfig.reserve_pool_pattern``) and rename it.
-    - ``"explicit"`` (in-place mode): claim the reserve-pool slot ``explicit_slot``
-      (e.g. 40 => ``<SPECIAL_40>``) and rename it.
+    - ``"explicit"`` (in-place mode): claim the reserve-pool slot ``explicit_slot`` --
+      a pool ordinal (``40`` => ``<SPECIAL_40>``) or a full reserve-token name
+      (``"<SPECIAL_40>"``) -- and rename it.
 
     Backward compat: legacy positional entries ``TokenRename(1, "<|img_start|>")``
     set ``reserved_index`` and ``source`` is inferred as ``"reserved"``.
@@ -33,7 +34,7 @@ class TokenRename:
     alias: str | None = None
     source: str | None = None
     existing_name: str | None = None
-    explicit_slot: int | None = None
+    explicit_slot: int | str | None = None
 
     def __post_init__(self) -> None:
         if not self.target_name:

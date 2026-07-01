@@ -225,6 +225,20 @@ def test_per_modality_region(inplace_stacked):
     )
 
 
+def test_content_not_in_named_special_role(inplace_stacked):
+    # Mirror Apertus 1.5: content tokens are atomic special-flag tokens but are NOT
+    # enrolled in the additional_special_tokens named role, so special_tokens_map stays
+    # clean (bos/eos/pad/unk only) and content ids stay out of all_special_ids.
+    stm = _mapping(inplace_stacked, "special_tokens_map.json")
+    assert not stm.get("additional_special_tokens"), \
+        "content must not populate the additional_special_tokens named role"
+    tok = AutoTokenizer.from_pretrained(inplace_stacked)
+    for name in ("<|visual token 0|>", "<|audio token 0|>"):
+        tid = tok.convert_tokens_to_ids(name)
+        assert tok.encode(name, add_special_tokens=False) == [tid]  # still atomic
+        assert tid not in tok.all_special_ids                       # but not "named"
+
+
 # ── idempotency (re-run) ─────────────────────────────────────────────────────
 
 
@@ -298,6 +312,75 @@ def test_slot_assignment_on_reused_token_raises(tmp_path):
             INPLACE_BASE, str(tmp_path / "bad"), "vision", SMALL_VOCAB,
             allocation="in_place",
             slot_assignments={"<|image|>": _base_pool_ordinals()[0]},
+        )
+
+
+def test_slot_assignment_by_full_name(tmp_path):
+    # slot_assignments values may be a full reserve-token name, not only the ordinal.
+    ordinal = _base_pool_ordinals()[8]
+    out = str(tmp_path / "byname")
+    add_modality(
+        INPLACE_BASE, out, "vision", SMALL_VOCAB, allocation="in_place",
+        slot_assignments={"<|img_start|>": f"<SPECIAL_{ordinal}>"},
+    )
+    tok = AutoTokenizer.from_pretrained(out)
+    assert tok.convert_tokens_to_ids("<|img_start|>") == _base_token_id(f"<SPECIAL_{ordinal}>")
+
+
+def test_slot_assignment_full_name_not_in_pool_raises(tmp_path):
+    with pytest.raises(ValueError, match="reserve-pool token"):
+        add_modality(
+            INPLACE_BASE, str(tmp_path / "bad"), "vision", SMALL_VOCAB,
+            allocation="in_place",
+            slot_assignments={"<|img_start|>": "<SPECIAL_9999>"},
+        )
+
+
+def test_slot_assignment_unknown_key_raises(tmp_path):
+    # A key that names no structure token (typo) must error, not silently no-op.
+    with pytest.raises(ValueError, match="not a structure token"):
+        add_modality(
+            INPLACE_BASE, str(tmp_path / "bad"), "vision", SMALL_VOCAB,
+            allocation="in_place",
+            slot_assignments={"<|img_stat|>": _base_pool_ordinals()[0]},
+        )
+
+
+def test_reserve_pool_pattern_override_restricts_pool(tmp_path):
+    # A restrictive pattern (only <SPECIAL_3x>) proves pool_pattern is actually used:
+    # img_start auto-fills 30, not the default lowest free (27).
+    out = str(tmp_path / "restrict")
+    add_modality(
+        INPLACE_BASE, out, "vision", SMALL_VOCAB, allocation="in_place",
+        reserve_pool_pattern=r"^<SPECIAL_(3\d)>$",
+    )
+    tok = AutoTokenizer.from_pretrained(out)
+    assert tok.convert_tokens_to_ids("<|img_start|>") == _base_token_id("<SPECIAL_30>")
+
+
+def test_reserve_pool_pattern_no_match_raises(tmp_path):
+    # A pattern matching no token -> empty pool -> exhausted when auto-allocating.
+    with pytest.raises(ValueError, match="exhausted"):
+        add_modality(
+            INPLACE_BASE, str(tmp_path / "bad"), "vision", SMALL_VOCAB,
+            allocation="in_place", reserve_pool_pattern=r"^<NOPE_(\d+)>$",
+        )
+
+
+def test_reserve_pool_pattern_wrong_group_count_raises(tmp_path):
+    with pytest.raises(ValueError, match="one capture group"):
+        add_modality(
+            INPLACE_BASE, str(tmp_path / "bad"), "vision", SMALL_VOCAB,
+            allocation="in_place", reserve_pool_pattern=r"^<SPECIAL_(\d)(\d+)>$",
+        )
+
+
+def test_slot_assignment_bad_type_raises(tmp_path):
+    # A bool/float slot value is neither a pool ordinal (int) nor a name (str).
+    with pytest.raises(ValueError, match="pool ordinal .int. or a"):
+        add_modality(
+            INPLACE_BASE, str(tmp_path / "bad"), "vision", SMALL_VOCAB,
+            allocation="in_place", slot_assignments={"<|img_start|>": 3.5},
         )
 
 
