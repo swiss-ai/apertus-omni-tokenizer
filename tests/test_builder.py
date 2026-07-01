@@ -266,3 +266,17 @@ class TestVocabSizeGuard:
         # Raises before any tokenizer load, so no network/base download needed.
         with pytest.raises(ValueError, match="vocab_size must be"):
             add_modality(BASE_TOKENIZER, str(tmp_path / "z"), "vision", 0)
+
+
+class TestAppendCleanMap:
+    def test_append_content_not_named(self, vision_tokenizer):
+        # After the streamline both modes use add_tokens(special_tokens=True): append
+        # content is a special-flag token but NOT in the additional_special_tokens role.
+        with open(os.path.join(vision_tokenizer, "special_tokens_map.json")) as f:
+            stm = json.load(f)
+        assert not stm.get("additional_special_tokens"), \
+            "append special_tokens_map should stay bos/eos/pad/unk-only"
+        tok = AutoTokenizer.from_pretrained(vision_tokenizer)
+        tid = tok.convert_tokens_to_ids("<|visual token 0|>")
+        assert tok.encode("<|visual token 0|>", add_special_tokens=False) == [tid]  # atomic
+        assert tid not in tok.all_special_ids                                        # not named

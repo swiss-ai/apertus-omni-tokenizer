@@ -34,7 +34,8 @@ def add_modality(
     vocab_size: int,
     *,
     allocation: str = "append",
-    slot_assignments: dict[str, int] | None = None,
+    slot_assignments: dict[str, int | str] | None = None,
+    reserve_pool_pattern: str | None = None,
     allow_existing: bool = True,
     dry_run: bool = False,
     num_reserved_tokens: int = 200,
@@ -54,8 +55,13 @@ def add_modality(
         allocation: ``"append"`` (default) appends a RESERVED_OMNI block on top of
                   the base vocab. ``"in_place"`` reuses pre-baked specials and the
                   ``<SPECIAL_*>`` reserve pool already present in the base vocab.
-        slot_assignments: in-place only -- explicit ``{target_name: pool_ordinal}``
-                  overrides, e.g. ``{"<|img_start|>": 40}``.
+        slot_assignments: in-place only -- explicit ``{target_name: slot}`` overrides,
+                  where ``slot`` is a pool ordinal (the N in ``<SPECIAL_N>``) or a full
+                  reserve-token name, e.g. ``{"<|img_start|>": 40}`` or
+                  ``{"<|img_start|>": "<SPECIAL_40>"}``.
+        reserve_pool_pattern: in-place only -- override the ModalityConfig's reserve-pool
+                  regex; one capture group = the ordinal (e.g. a pattern matching
+                  ``<extra_id_0>``, ``<extra_id_1>``, ...).
         allow_existing: if a token to be added already exists, skip it (always);
                   when False, raise on any *unexpected* pre-existing token
                   (declared reuse tokens are exempt). Default True.
@@ -147,6 +153,7 @@ def add_modality(
         tokenizer, mc, vocab_size,
         allocation=allocation,
         slot_assignments=slot_assignments,
+        reserve_pool_pattern=reserve_pool_pattern,
         allow_existing=allow_existing,
         num_reserved_tokens=num_reserved_tokens,
     )
@@ -218,7 +225,10 @@ def _partition_content(
 
 
 def _resolve_inplace_slots(
-    mc: ModalityConfig, slot_assignments: dict[str, int] | None, vocab: dict[str, int]
+    mc: ModalityConfig,
+    slot_assignments: dict[str, int | str] | None,
+    vocab: dict[str, int],
+    pool_pattern: str | None = None,
 ) -> list[dict[str, Any]]:
     """Resolve every in-place structure token to a concrete id + action.
 
@@ -234,42 +244,80 @@ def _resolve_inplace_slots(
     an unexpected pre-existing pool/explicit target -> ``unexpected=True``).
     Otherwise a free ``<SPECIAL_n>`` slot is picked and ``rename_from`` is set.
 
-    ``slot_assignments``/``explicit_slot`` values are pool ORDINALS (the N in
-    ``<SPECIAL_N>``), not token ids.
+    ``slot_assignments``/``explicit_slot`` values are pool ordinals (the N in
+    ``<SPECIAL_N>``) OR full reserve-token names (``"<SPECIAL_40>"``) -- not token ids.
+    ``pool_pattern`` overrides ``mc.reserve_pool_pattern`` (one capture group = the ordinal).
 
     Stacking works without bookkeeping: once a slot is renamed it no longer matches
     the reserve-pool pattern, so a later modality's discovery never re-picks it.
     """
-    if not mc.reserve_pool_pattern:
+    pattern = pool_pattern or mc.reserve_pool_pattern
+    if not pattern:
         raise ValueError(
-            f"{mc.name}: in_place mode requires reserve_pool_pattern on the "
-            f"ModalityConfig (none set)."
+            f"{mc.name}: in_place mode requires a reserve-pool pattern "
+            f"(pass reserve_pool_pattern or set it on the ModalityConfig)."
+        )
+    try:
+        compiled = re.compile(pattern)
+    except re.error as e:
+        raise ValueError(
+            f"{mc.name}: invalid reserve_pool_pattern {pattern!r}: {e}"
+        ) from e
+    if compiled.groups != 1:
+        raise ValueError(
+            f"{mc.name}: reserve_pool_pattern {pattern!r} must have exactly one "
+            f"capture group (the pool ordinal)."
         )
     slot_assignments = slot_assignments or {}
 
-    # A slot_assignments override only makes sense for a token that claims a pool
-    # slot; a reused token has no slot, so silently ignoring it would be a footgun.
+    # slot_assignments must name a structure token of this modality (catch typos),
+    # and cannot target a reused token (which claims no pool slot).
+    structure_targets = {r.target_name for r in mc.structure_tokens}
     reuse_targets = {r.target_name for r in mc.structure_tokens if r.source == "reuse"}
     for name in slot_assignments:
+        if name not in structure_targets:
+            raise ValueError(
+                f"{mc.name}: slot_assignments key {name!r} is not a structure token "
+                f"of this modality"
+            )
         if name in reuse_targets:
             raise ValueError(
                 f"{mc.name}: slot_assignments cannot target reused token {name!r} "
                 f"(it has no reserve-pool slot)"
             )
 
-    # Discover the free reserve pool: ordinal -> token string.
+    # Discover the free reserve pool: ordinal -> token string (+ reverse map).
+    # fullmatch so a custom pattern must span the whole token, not just its prefix.
     pool: dict[int, str] = {}
     for tok in vocab:
-        m = re.match(mc.reserve_pool_pattern, tok)
+        m = compiled.fullmatch(tok)
         if m:
             pool[int(m.group(1))] = tok
     pool_ordinals = sorted(pool)
+    name_to_ordinal = {tok: o for o, tok in pool.items()}
+
+    def _to_ordinal(value):
+        # A requested slot is either a pool ordinal (int) or a full reserve-token
+        # name (str, e.g. "<SPECIAL_40>").
+        if isinstance(value, str):
+            if value not in name_to_ordinal:
+                raise ValueError(
+                    f"{mc.name}: slot {value!r} is not a free reserve-pool token "
+                    f"(pattern {pattern})"
+                )
+            return name_to_ordinal[value]
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(
+                f"{mc.name}: slot {value!r} must be a pool ordinal (int) or a "
+                f"reserve-token name (str)"
+            )
+        return value
 
     def _requested(rn):
         # explicit override (slot_assignments) > config explicit_slot > auto (None)
         if rn.target_name in slot_assignments:
-            return slot_assignments[rn.target_name]
-        return rn.explicit_slot if rn.source == "explicit" else None
+            return _to_ordinal(slot_assignments[rn.target_name])
+        return _to_ordinal(rn.explicit_slot) if rn.source == "explicit" else None
 
     # Pass 1: reserve explicitly-requested ordinals up-front so an auto pick can
     # never steal a slot that a later explicit token needs.
@@ -283,7 +331,7 @@ def _resolve_inplace_slots(
         if ordinal not in pool:
             raise ValueError(
                 f"{mc.name}: slot {ordinal} for {r.target_name} is not a free "
-                f"reserve-pool token (pool pattern {mc.reserve_pool_pattern})"
+                f"reserve-pool token (pool pattern {pattern})"
             )
         if ordinal in claimed:
             raise ValueError(
@@ -319,7 +367,7 @@ def _resolve_inplace_slots(
             if not free:
                 raise ValueError(
                     f"{mc.name}: reserve pool exhausted "
-                    f"({len(pool_ordinals)} {mc.reserve_pool_pattern} slots, all claimed)"
+                    f"({len(pool_ordinals)} {pattern} slots, all claimed)"
                 )
             ordinal = free[0]
             claimed.add(ordinal)
@@ -337,7 +385,8 @@ def _plan_modality(
     vocab_size: int,
     *,
     allocation: str,
-    slot_assignments: dict[str, int] | None,
+    slot_assignments: dict[str, int | str] | None,
+    reserve_pool_pattern: str | None = None,
     allow_existing: bool,
     num_reserved_tokens: int,
 ) -> dict[str, Any]:
@@ -365,7 +414,9 @@ def _plan_modality(
     }
 
     if allocation == "in_place":
-        resolved = _resolve_inplace_slots(mc, slot_assignments, vocab)
+        resolved = _resolve_inplace_slots(
+            mc, slot_assignments, vocab, pool_pattern=reserve_pool_pattern
+        )
         for e in resolved:
             r = e["rename"]
             plan["structure_ids"][e["target_name"]] = e["id"]
@@ -435,10 +486,14 @@ def _apply_modality(
     allocation: str,
 ):
     """Write the resolved plan to ``output_path``. Returns the reloaded tokenizer."""
-    # 1. Add tokens (append: reserved + content; in-place: content only).
+    # 1. Add tokens via add_tokens(special_tokens=True) -- both the appended RESERVED_OMNI
+    #    block (append mode) and the content tokens are atomic and stripped by
+    #    skip_special_tokens, but NOT enrolled in the additional_special_tokens named role.
+    #    So special_tokens_map.json stays clean (bos/eos/pad/unk only) and content ids stay
+    #    out of all_special_ids/masks, in both modes and on any transformers version.
     to_add = plan["reserved_tokens"] + plan["content_new"]
     if to_add:
-        num_added = tokenizer.add_special_tokens({"additional_special_tokens": to_add})
+        num_added = tokenizer.add_tokens(to_add, special_tokens=True)
         print(f"Added {num_added:,} new tokens")
 
     # 2. Save tokenizer + base metadata.

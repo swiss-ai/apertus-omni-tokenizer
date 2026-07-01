@@ -1,134 +1,25 @@
 # omnitok
 
-This package documents the chat templates and core tokenizers used in Apertus, and provides utilities for extending LLaMA-3/Apertus text tokenizers with additional vision and audio modalities.
+This package stores the canonical chat templates and tokenizers shipped with Apertus, and
+provides utilities for **extending** a LLaMA-3/Apertus text tokenizer with vision and audio
+modalities — via two allocation modes (`append` and `in_place`).
 
-## Extension Scripts
+## Shipped Tokenizers & Templates
 
-```bash
-# Add vision
-python -m omnitok.cli add-modality \
-    --input-tokenizer swiss-ai/Apertus-8B-2509 \
-    --output-path ./omni_vision \
-    --modality vision \
-    --vocab-size 131072
+The final instruct omni-tokenizers used in production are checked into this repo. Each
+tokenizer directory holds `tokenizer.json`, `tokenizer_config.json`, and
+`special_tokens_map.json`.
 
-# Stack audio on top
-python -m omnitok.cli add-modality \
-    --input-tokenizer ./omni_vision \
-    --output-path ./omni_vision_audio \
-    --modality audio \
-    --vocab-size 4096
 
-# Add instruct (chat template + SFT sequences)
-python -m omnitok.cli add-instruct \
-    --base-tokenizer-path ./omni_vision_audio \
-    --instruct-tokenizer-path swiss-ai/Apertus-8B-2509-Instruct \
-    --output-path ./omni_instruct
-```
+| Model       | Tokenizer                 | Chat template                                    | Checksum manifest            |
+| ----------- | ------------------------- | ------------------------------------------------ | ---------------------------- |
+| Apertus 1.0 | `tokenizers/Apertus_1/`   | `chat_templates/Apertus_1/chat_template.jinja`   | `validation/Apertus_1.md5`   |
+| Apertus 1.5 | `tokenizers/Apertus_1p5/` | `chat_templates/Apertus_1p5/chat_template.jinja` | `validation/Apertus_1p5.md5` |
 
-Or as a library:
 
-```python
-from omnitok import add_modality, create_instruct_tokenizer
 
-add_modality("swiss-ai/Apertus-8B-2509", "./omni_vision", "vision", vocab_size=131072)
-add_modality("./omni_vision", "./omni_vision_audio", "audio", vocab_size=4096)
-create_instruct_tokenizer("./omni_vision_audio", "swiss-ai/Apertus-8B-2509-Instruct", "./omni_instruct")
-```
 
-## Token layout
-
-```
-[0 .. base-1]           text tokens (unchanged)
-[base .. base+199]      200 reserved OMNI slots
-  slot 0                  boundary marker (never renamed)
-  slots 1-7               vision structure tokens
-  slots 8-15              audio structure tokens
-  slots 16-199            reserved for future modalities
-[base+200 .. ]          content tokens (appended per modality in order added)
-```
-
-## Reserved slot allocation
-
-| Slots | Modality | Tokens |
-|-------|----------|--------|
-| 0 | -- | `<\|RESERVED_OMNI_000\|>` (boundary) |
-| 1-7 | Vision | img_start, img_end, img_token_start, img_end_of_row, img_end_of_frame, img_generation_start, image |
-| 8-15 | Audio | audio_start, audio_end, stt_transcribe, stt_continue, tts_continue, audio, stt_translate, audio_annotate |
-| 16-199 | -- | Reserved |
-
-## Token aliases
-
-`<image>` and `<|image|>` encode to the same token ID. Same for `<audio>` / `<|audio|>`. Handled by the tokenizer's normalizer -- no manual `.replace()` needed in data loaders.
-
-## In-place mode (reuse a pre-baked reserved pool)
-
-The default `add-modality` **appends** a 200-slot `RESERVED_OMNI` block on top of the
-base vocab (the layout above). Some base tokenizers instead **pre-bake** the special
-tokens *inside* their vocab — e.g. the 200k multilingual tokenizer ships `<|image|>`,
-`<|audio|>`, and a free reserve pool `<SPECIAL_27>`…`<SPECIAL_123>`. For those, use
-`--allocation in_place`: existing tokens are **reused**, structure tokens are
-**renamed from the pool**, and only the content (codebook) tokens are appended.
-
-```bash
-# vision: reuse <|image|>; rename <SPECIAL_27..32> -> img_start..img_generation_start; append content
-python -m omnitok.cli add-modality --allocation in_place \
-    --input-tokenizer ./preliminary_mul_200k --output-path ./omni_vision \
-    --modality vision --vocab-size 131072
-
-# stack audio: reuse <|audio|>; rename the next free <SPECIAL_*> slots; append content
-python -m omnitok.cli add-modality --allocation in_place \
-    --input-tokenizer ./omni_vision --output-path ./omni_vision_audio \
-    --modality audio --vocab-size 4096
-
-# preview only -- resolve + print the change report, write nothing
-python -m omnitok.cli add-modality --allocation in_place --dry-run \
-    --input-tokenizer ./preliminary_mul_200k --output-path ./omni_vision \
-    --modality vision --vocab-size 131072
-```
-
-```python
-from omnitok import add_modality
-add_modality("./preliminary_mul_200k", "./omni_vision", "vision", 131072, allocation="in_place")
-add_modality("./omni_vision", "./omni_vision_audio", "audio", 4096, allocation="in_place")
-```
-
-Layout (content appends after the base vocab; structure tokens stay in place):
-
-```
-[0 .. base-1]   text + pre-baked specials, incl. <|image|>, <|audio|>, <SPECIAL_*> pool
-  reused          <|image|>, <|audio|>            (kept at their existing ids)
-  renamed         img_start..img_generation_start <- <SPECIAL_27..32>
-                  audio_start..audio_annotate     <- <SPECIAL_33..39>
-[base .. ]      content tokens (appended per modality in order added)
-```
-
-Flags:
-
-- `--allocation {append,in_place}` (default `append`).
-- `--slot-assignments '{"<|img_start|>": 40}'` — pin a structure token to a pool
-  **ordinal** (the N in `<SPECIAL_N>`) instead of auto-filling the lowest free slot.
-- `--allow-existing` / `--no-allow-existing` (default allow) — always skip tokens that
-  already exist; `--no-allow-existing` errors on any *unexpected* pre-existing token
-  (declared-reuse tokens like `<|image|>` are exempt).
-- `--dry-run` — print the full change report (reused, renames, aliases, content id
-  range) without writing any files.
-
-In-place `omnimodal_config` gains `allocation: "in_place"`, the claimed reserve-pool
-range (`omni_special_token_offset` + `omni_special_token_count`), an authoritative
-`omni_special_token_ids` union, and per-modality `special_region_offset` /
-`special_region_count` / `reused_special_ids` / `structure_token_ids`. Under scattered
-`--slot-assignments`, treat `omni_special_token_ids` as authoritative.
-
-## Known codebook sizes
-
-| Tokenizer | Modality | Codebook Size |
-|-----------|----------|---------------|
-| Emu3.5 (IBQ) | Vision | 131,072 |
-| Emu3 | Vision | 32,768 |
-| WavTokenizer | Audio | 4,096 |
-
-## Validating a deployed model
+### Validating a deployed model
 
 To check that a served model directory ships the exact canonical tokenizer (chat
 template, tokenizer, config, special tokens), run `validate_model.sh` against it.
@@ -164,7 +55,196 @@ to the current directory, `MODEL_NAME` defaults to `Apertus_1p5` (pass
 `Apertus_1` to validate the 1.0 tokenizer). The canonical checksums are
 regenerated by `validation/gen_checksums.sh` and kept in sync by CI.
 
-## Structure
+## Extending Tokenizers
+
+`add_modality()` turns a base **text** tokenizer into an **omni** tokenizer by adding
+vision/audio tokens. It supports two allocation modes, depending on whether the base already
+pre-bakes omni special tokens.
+
+Two things are worth reading first: pick the **[allocation mode](#allocation-modes-append-vs-in_place)**
+that matches your base tokenizer (`append` vs `in_place`), and skim the
+**[transformers-version note](#special-tokens--the-transformers-version)** on
+`additional_special_tokens` — it matters if you build loss masks or need to match the
+Apertus 1.5 `special_tokens_map`.
+
+**Sections:** [How a tokenizer is modified](#how-a-tokenizer-is-modified) ·
+[Allocation modes](#allocation-modes-append-vs-in_place) ·
+[Extension scripts & flags](#extension-scripts-cli--library) ·
+[Tokenizer layout](#tokenizer-layout) ·
+[Token aliases](#token-aliases) ·
+[Special tokens & transformers version](#special-tokens--the-transformers-version) ·
+[Known codebook sizes](#known-codebook-sizes)
+
+### How a tokenizer is modified
+
+Extending writes three things into the output tokenizer directory:
+
+1. **Added tokens** — both the per-modality *structure* tokens (`<|img_start|>`, `<|image|>`,
+  `<|audio_start|>`, …) and the *content* tokens (one per codebook entry, e.g.
+   `<|visual token 0|>`) are added as **special added tokens**. Special added tokens are
+   matched verbatim *before* the BPE model runs, so each maps to exactly **one id** and is
+   never split (a plain BPE vocab entry would fragment). Content tokens are one-per-codebook-
+   entry so the model can emit them autoregressively.
+  Both modes add them via `add_tokens(special_tokens=True)` — atomic and stripped by
+  `skip_special_tokens`, but **not** enrolled in the `additional_special_tokens` named role
+  (see the note below), so `special_tokens_map.json` stays clean.
+2. **Modality metadata** — `omnimodal_config` in `tokenizer_config.json` (per-modality
+  offsets, ranges, and an id union) plus a per-modality `*_token_mapping.json` recording the
+   **codebook-index ↔ token-id** contract. Downstream data pipelines use these to convert
+   codebook indices into token ids.
+3. **Aliases** — a normalizer rewrite so `<image>`/`<audio>` encode to the same id as
+  `<|image|>`/`<|audio|>` (no manual `.replace()` in data loaders).
+
+
+
+### Allocation modes (`append` vs `in_place`)
+
+- `append` (default): don't use existing, unoccupied, special token slots in the base tokenizer. Appends a 200-slot `RESERVED_OMNI`
+block on top of the base vocab, renames slots into structure tokens, then appends content.
+Used for Apertus 1.0 / 1.5 (base `swiss-ai/Apertus-8B-2509`).
+- `in_place`: the base vocab ships a `<SPECIAL_*>` reserve pool which is used to fill with omni speical tokens.
+Renames pool slots into the remaining structure tokens, and appends content — no new reserved block.
+The pool pattern defaults to `<SPECIAL_N>`; override it with `--reserve-pool-pattern` for bases that name their pool differently.
+
+
+
+### Extension scripts (CLI & library)
+
+```bash
+# APPEND (base has no omni specials, e.g. Apertus 1.0/1.5)
+python -m omnitok.cli add-modality \
+    --input-tokenizer swiss-ai/Apertus-8B-2509 --output-path ./omni_vision \
+    --modality vision --vocab-size 131072
+python -m omnitok.cli add-modality \
+    --input-tokenizer ./omni_vision --output-path ./omni_vision_audio \
+    --modality audio --vocab-size 4096
+
+# IN-PLACE (base pre-bakes specials + a <SPECIAL_*> pool, e.g. the 200k tokenizer)
+python -m omnitok.cli add-modality --allocation in_place \
+    --input-tokenizer ./preliminary_mul_200k --output-path ./omni_vision \
+    --modality vision --vocab-size 131072
+python -m omnitok.cli add-modality --allocation in_place \
+    --input-tokenizer ./omni_vision --output-path ./omni_vision_audio \
+    --modality audio --vocab-size 4096
+
+# Preview any build without writing files (--dry-run)
+python -m omnitok.cli add-modality --allocation in_place --dry-run \
+    --input-tokenizer ./preliminary_mul_200k --output-path ./omni_vision \
+    --modality vision --vocab-size 131072
+
+# Add instruct (chat template + SFT sequences) on top of an omni tokenizer
+python -m omnitok.cli add-instruct \
+    --base-tokenizer-path ./omni_vision_audio \
+    --instruct-tokenizer-path swiss-ai/Apertus-8B-2509-Instruct \
+    --output-path ./omni_instruct
+```
+
+```python
+from omnitok import add_modality, create_instruct_tokenizer
+
+# append (default)
+add_modality("swiss-ai/Apertus-8B-2509", "./omni_vision", "vision", vocab_size=131072)
+add_modality("./omni_vision", "./omni_vision_audio", "audio", vocab_size=4096)
+
+# in-place
+add_modality("./preliminary_mul_200k", "./omni_vision", "vision", 131072, allocation="in_place")
+add_modality("./omni_vision", "./omni_vision_audio", "audio", 4096, allocation="in_place")
+
+create_instruct_tokenizer("./omni_vision_audio", "swiss-ai/Apertus-8B-2509-Instruct", "./omni_instruct")
+```
+
+`add-modality` flags / Options:
+
+
+| Flag                                         | Mode     | Description                                                                                                         |
+| -------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------- |
+| `--input-tokenizer` / `--output-path`        | both     | base tokenizer (path or HF id) and where to write the result                                                        |
+| `--modality {vision,audio}`                  | both     | which modality to add                                                                                               |
+| `--vocab-size N`                             | both     | codebook size (number of content tokens)                                                                            |
+| `--allocation {append,in_place}`             | both     | allocation strategy (default `append`)                                                                              |
+| `--num-reserved-tokens N`                    | append   | size of the `RESERVED_OMNI` block (default 200)                                                                     |
+| `--slot-assignments '{"<|img_start|>": 40}'` | in_place | pin a structure token to a slot — a pool **ordinal** (the N in `<SPECIAL_N>`) or a full reserve-token name (`"<SPECIAL_40>"`) — instead of auto-filling the lowest free slot |
+| `--reserve-pool-pattern '^<extra_id_(\d+)>$'` | in_place | override the reserve-pool regex (one capture group = the ordinal) when the base names its pool differently |
+| `--allow-existing` / `--no-allow-existing`   | both     | skip tokens that already exist (default allow); `--no-allow-existing` errors on any *unexpected* pre-existing token |
+| `--dry-run`                                  | both     | resolve + print the change report, write nothing                                                                    |
+| `--extra-config '{"type": "...", ...}'`      | both     | modality metadata written under `vision_tokenizer` / `audio_tokenizer`                                              |
+
+
+`add-instruct` takes `--base-tokenizer-path`, `--instruct-tokenizer-path` (path or HF id of a
+chat-template source), and `--output-path`.
+
+### Tokenizer layout
+
+**Append** — an omni block is appended above the base text vocab:
+
+```
+[0 .. base-1]           text tokens (unchanged)
+[base .. base+199]      200 reserved OMNI slots
+  slot 0                  boundary marker (never renamed)
+  slots 1-7               vision structure tokens
+  slots 8-15              audio structure tokens
+  slots 16-199            reserved for future modalities
+[base+200 .. ]          content tokens (appended per modality in order added)
+```
+
+
+| Slots  | Modality | Tokens                                                                                                   |
+| ------ | -------- | -------------------------------------------------------------------------------------------------------- |
+| 0      | --       | `<|RESERVED_OMNI_000|>` (boundary)                                                                       |
+| 1-7    | Vision   | img_start, img_end, img_token_start, img_end_of_row, img_end_of_frame, img_generation_start, image       |
+| 8-15   | Audio    | audio_start, audio_end, stt_transcribe, stt_continue, tts_continue, audio, stt_translate, audio_annotate |
+| 16-199 | --       | Reserved                                                                                                 |
+
+
+**In-place** — structure tokens stay inside the base vocab; only content is appended:
+
+```
+[0 .. base-1]   text + pre-baked specials, incl. <|image|>, <|audio|>, <SPECIAL_*> pool
+  reused          <|image|>, <|audio|>            (kept at their existing ids)
+  renamed         img_start..img_generation_start <- <SPECIAL_27..32>
+                  audio_start..audio_annotate     <- <SPECIAL_33..39>
+[base .. ]      content tokens (appended per modality in order added)
+```
+
+In-place `omnimodal_config` additionally records `allocation: "in_place"`, the claimed
+reserve-pool range (`omni_special_token_offset` + `omni_special_token_count`), an
+authoritative `omni_special_token_ids` union, and per-modality `special_region_offset` /
+`special_region_count` / `reused_special_ids` / `structure_token_ids`. Under scattered
+`--slot-assignments`, treat `omni_special_token_ids` as authoritative.
+
+### Token aliases
+
+`<image>` and `<|image|>` encode to the same token ID. Same for `<audio>` / `<|audio|>`.
+Handled by the tokenizer's normalizer -- no manual `.replace()` needed in data loaders.
+
+### Special tokens & the transformers version
+
+Both modes add tokens with `add_tokens(special_tokens=True)`: they are atomic special tokens
+(one id, stripped by `skip_special_tokens`) but are **not** enrolled in the
+`additional_special_tokens` named role. So `special_tokens_map.json` stays
+`bos/eos/pad/unk`-only and content ids stay out of `all_special_ids` / masks, on **any**
+transformers version — matching the Apertus 1.5 artifact.
+
+Background: `add_special_tokens({"additional_special_tokens": …})` *would* enroll tokens in
+the named role, and newer transformers (e.g. 4.57.x) serialize that role into
+`special_tokens_map.json` (older ones — including the one that built Apertus 1.5 — did not).
+Using `add_tokens(special_tokens=True)` sidesteps that entirely, so fresh builds are clean
+regardless of transformers version. Older shipped artifacts built with `add_special_tokens`
+are unchanged.
+
+### Known codebook sizes
+
+
+| Tokenizer    | Modality | Codebook Size |
+| ------------ | -------- | ------------- |
+| Emu3.5 (IBQ) | Vision   | 131,072       |
+| Emu3         | Vision   | 32,768        |
+| WavTokenizer | Audio    | 4,096         |
+
+
+
+
+## Repository structure
 
 ```
 apertus-omni-tokenizer/
@@ -181,7 +261,8 @@ apertus-omni-tokenizer/
 ├── tests/
 │   ├── conftest.py           # shared fixtures
 │   ├── test_alias.py         # token alias tests (<image> == <|image|>)
-│   ├── test_builder.py       # add_modality tests
+│   ├── test_builder.py       # add_modality tests (append) + append-layout guards
+│   ├── test_inplace.py       # in-place allocation tests
 │   ├── test_chat_template.py # add chat template test
 │   ├── test_task_tokens.py   # task token contract tests
 │   └── test_tokenizers.py    # checked-in tokenizers load + special-token IDs
@@ -189,16 +270,10 @@ apertus-omni-tokenizer/
 │   └── rename_tool_tokens.py # Script used to add new special tokens in tool calling parsing
 ├── tokenizers/
 │   ├── Apertus_1/            # Instructed tokenizer used for Apertus 1.0
-│   │   ├── tokenizer.json
-│   │   └── tokenizer_config.json
 │   └── Apertus_1p5/          # Instructed tokenizer used for Apertus 1.5
-│       ├── tokenizer.json
-│       └── tokenizer_config.json
 ├── chat_templates/
-│   ├── Apertus_1/            # Chat template used for Apertus 1.0
-│   │   └── chat_template.jinja
-│   └── Apertus_1p5/          # Chat template used for Apertus 1.5
-│       └── chat_template.jinja
+│   ├── Apertus_1/chat_template.jinja      # Chat template used for Apertus 1.0
+│   └── Apertus_1p5/chat_template.jinja    # Chat template used for Apertus 1.5
 └── validation/
     ├── gen_checksums.sh      # regenerate the manifests below
     ├── Apertus_1.md5         # canonical md5s for the 1.0 tokenizer
@@ -209,4 +284,5 @@ Adding a new modality = one new `ModalityConfig` entry in `modalities.py`.
 
 ## Author
 
-Yixuan Xu (yixuan.xu@ai.ethz.ch)
+Yixuan Xu ([yixuan.xu@ai.ethz.ch](mailto:yixuan.xu@ai.ethz.ch))
+Raphael Kreft ([rkreft@ai.ethz.ch](mailto:rkreft@ai.ethz.ch))

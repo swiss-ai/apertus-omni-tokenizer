@@ -25,6 +25,7 @@ def cmd_add_modality(args: argparse.Namespace) -> None:
         vocab_size=args.vocab_size,
         allocation=args.allocation,
         slot_assignments=slot_assignments,
+        reserve_pool_pattern=args.reserve_pool_pattern,
         allow_existing=args.allow_existing,
         dry_run=args.dry_run,
         num_reserved_tokens=args.num_reserved_tokens,
@@ -77,9 +78,14 @@ def main() -> None:
     )
     p_add.add_argument(
         "--slot-assignments", type=str, default=None,
-        help='in_place only: JSON map of explicit pool-ORDINAL overrides (the N in '
-             '<SPECIAL_N>, not a token id), e.g. \'{"<|img_start|>": 40}\' pins it to '
-             '<SPECIAL_40>.',
+        help='in_place only: JSON map of explicit slot overrides. Each value is a pool '
+             'ordinal (the N in <SPECIAL_N>) or a full reserve-token name, e.g. '
+             '\'{"<|img_start|>": 40}\' or \'{"<|img_start|>": "<SPECIAL_40>"}\'.',
+    )
+    p_add.add_argument(
+        "--reserve-pool-pattern", type=str, default=None,
+        help="in_place only: override the reserve-pool regex (one capture group = the "
+             "ordinal), e.g. matching <extra_id_0>, <extra_id_1>, ...",
     )
     p_add.add_argument(
         "--allow-existing", action=argparse.BooleanOptionalAction, default=True,
