@@ -7,6 +7,24 @@ Extracts tool calls from the format:
 <|tools_prefix|>[{"function_name": {"arg1": "value1", ...}}, ...]<|tools_suffix|>
 
 Used when --enable-auto-tool-choice --tool-call-parser apertus are set.
+
+vLLM compatibility
+------------------
+Verified against the refactored vLLM module layout used by **v0.19 - v0.24+**
+(top-level ``vllm.tool_parsers`` + split ``protocol.py`` under
+``vllm.entrypoints.openai.{chat_completion,engine,responses}`` + ``vllm.tokenizers``).
+Every symbol imported below resolves with identical signatures across that range,
+and the ``ToolParser`` base ``__init__(tokenizer, tools)`` contract is unchanged,
+so this plugin loads unmodified on any of those versions. The upstream Apertus
+tool parser (added in vLLM v0.22.0) is byte-identical across v0.22-v0.24; this
+file is that logic plus the ``@ToolParserManager.register_module`` line needed to
+load it as a ``--tool-parser-plugin``.
+
+It does **not** run on the pre-refactor layout (<= v0.10.2): that uses
+``vllm.entrypoints.openai.tool_parsers`` with a single ``protocol.py``,
+``AnyTokenizer``, and a base ``ToolParser.__init__(tokenizer)`` that takes no
+``tools`` argument (construction would fail here). A separate backport is needed
+for those older engines.
 """
 
 import json

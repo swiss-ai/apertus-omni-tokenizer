@@ -10,6 +10,21 @@ detector).
 | `apertus_tool_parser.py` | tool parser `apertus` | `--tool-call-parser apertus --tool-parser-plugin .../apertus_tool_parser.py` |
 | `apertus_reasoning_parser.py` | reasoning parser `apertus` | `--reasoning-parser apertus --reasoning-parser-plugin .../apertus_reasoning_parser.py` |
 
+## vLLM version compatibility
+
+`apertus_tool_parser.py` targets the **refactored** vLLM module layout and is
+verified to load unmodified across **v0.19 – v0.24+**:
+
+| vLLM range | Layout | This plugin |
+|---|---|---|
+| **v0.19 – v0.24+** | `vllm.tool_parsers` + split `protocol.py` + `vllm.tokenizers` | ✅ runs unmodified |
+| v0.22 – v0.24 | upstream ships `vllm/tool_parsers/apertus_tool_parser.py` (byte-identical to this, minus the plugin `register_module` line) | ✅ |
+| **≤ v0.10.2** (pre-refactor, e.g. the 70B image) | `vllm.entrypoints.openai.tool_parsers` + single `protocol.py` + `AnyTokenizer`; base `__init__(tokenizer)` takes no `tools` arg | ❌ needs a separate backport |
+
+Verified by resolving every imported symbol against the actual vLLM source at
+each tag; the `ToolParser` base `__init__(tokenizer, tools)` contract is stable
+across the supported range.
+
 Enable reasoning generation (Apertus's own chat-template switch) with
 `--default-chat-template-kwargs.enable_thinking true`.
 
