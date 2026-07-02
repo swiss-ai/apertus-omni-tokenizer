@@ -18,6 +18,7 @@ from .io import (
     build_omnimodal_config,
     copy_modality_mapping_files,
     detect_existing_modalities,
+    mark_tokens_non_special,
     rename_reserved_token,
     save_tokenizer,
     write_tokenizer_config,
@@ -106,6 +107,7 @@ def add_modality(
             base_vocab_size,
             omnimodal_config=omnimodal_config,
         )
+        mark_tokens_non_special(output_path)
         stats["final_vocab_size"] = current_vocab_size
         tokenizer = AutoTokenizer.from_pretrained(output_path, use_fast=True)
         return tokenizer, stats
@@ -181,6 +183,11 @@ def add_modality(
         config_section_name=mc.config_section_name,
         omnimodal_config=omnimodal_config,
     )
+
+    # Keep the reasoning delimiters non-special so a reasoning parser can find
+    # them in the detokenized output under the default skip_special_tokens=True
+    # (apertus-omni-tokenizer #5).
+    mark_tokens_non_special(output_path)
 
     # Reload after all file mutations so the returned tokenizer matches disk.
     tokenizer = AutoTokenizer.from_pretrained(output_path, use_fast=True)
