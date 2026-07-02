@@ -298,7 +298,7 @@
       "lstrip": false,
       "rstrip": false,
       "normalized": false,
-      "special": true
+      "special": false
     },
     {
       "id": 33,
@@ -307,7 +307,7 @@
       "lstrip": false,
       "rstrip": false,
       "normalized": false,
-      "special": true
+      "special": false
     },
     {
       "id": 34,
@@ -631,7 +631,7 @@
       "lstrip": false,
       "rstrip": false,
       "normalized": false,
-      "special": true
+      "special": false
     },
     {
       "id": 70,
@@ -640,7 +640,7 @@
       "lstrip": false,
       "rstrip": false,
       "normalized": false,
-      "special": true
+      "special": false
     },
     {
       "id": 71,

@@ -25,11 +25,11 @@ The non-streaming override is the important bit: when the model emits NO inner
 tokens at all -- a direct tool call (``<|tools_prefix|>...``) or a plain answer
 with no deliberation -- the whole output is returned as ``content`` (not
 reasoning), so the tool-call parser still sees it and direct answers are not
-swallowed. Note (apertus-omni-tokenizer #5): because the delimiters are *special*
-tokens, the non-streaming string split only works when they survive
-detokenization (``skip_special_tokens=false``, which the tool parser forces when
-tools are active); streaming is unaffected. Registering the delimiters as
-non-special in the tokenizer builder removes that caveat.
+swallowed. The non-streaming string split needs the delimiters to survive
+detokenization; the tokenizer builder registers them as *non-special* so they do
+under the default ``skip_special_tokens=true`` (apertus-omni-tokenizer #5, fixed
+via ``mark_tokens_non_special``). Streaming keys on token ids and is unaffected
+either way.
 
 Load with::
 

@@ -10,10 +10,13 @@ Note the documented asymmetry in Apertus_1p5: <think>/</think> and
 back to the <|inner_*|> form. Apertus_1 has no such collision. See PR #7.
 """
 
+import json
 from pathlib import Path
 
 import pytest
 from transformers import AutoTokenizer
+
+from omnitok.io import mark_tokens_non_special
 
 TOKENIZERS_DIR = Path(__file__).resolve().parent.parent / "tokenizers"
 
@@ -89,3 +92,54 @@ def test_special_token_decode(tok_dir):
     tok = AutoTokenizer.from_pretrained(str(tok_dir))
     for token_id, expected in EXPECTED[tok_dir.name]["decode"].items():
         assert tok.decode([token_id]) == expected, token_id
+
+
+@pytest.mark.parametrize(
+    "tok_dir",
+    [p for p in TOKENIZER_DIRS if p.name in EXPECTED],
+    ids=[p.name for p in TOKENIZER_DIRS if p.name in EXPECTED],
+)
+def test_reasoning_delimiters_survive_skip_special(tok_dir):
+    """The reasoning delimiters (ids 32/33) are non-special, so they survive
+    decode under skip_special_tokens=True. If they were special, the default
+    detokenization would strip them and a vLLM reasoning parser could not find
+    the end-of-reasoning delimiter -- the whole deliberation block would leak
+    into `content` (apertus-omni-tokenizer #5)."""
+    tok = AutoTokenizer.from_pretrained(str(tok_dir))
+    for token_id, expected in EXPECTED[tok_dir.name]["decode"].items():
+        assert tok.decode([token_id], skip_special_tokens=True) == expected, token_id
+
+
+def test_mark_tokens_non_special_flips_and_is_idempotent(tmp_path):
+    """mark_tokens_non_special flips only the reasoning delimiters' `special`
+    flag across tokenizer.json + tokenizer_config.json, leaves other tokens and
+    all formatting intact, and is a no-op on a second run."""
+    tj = {
+        "added_tokens": [
+            {"id": 32, "content": "<|inner_prefix|>", "special": True},
+            {"id": 33, "content": "<|inner_suffix|>", "special": True},
+            {"id": 1, "content": "<eos>", "special": True},  # unrelated: untouched
+        ]
+    }
+    tc = {
+        "added_tokens_decoder": {
+            "32": {"content": "<|inner_prefix|>", "special": True},
+            "33": {"content": "<|inner_suffix|>", "special": True},
+        }
+    }
+    (tmp_path / "tokenizer.json").write_text(json.dumps(tj, indent=2))
+    (tmp_path / "tokenizer_config.json").write_text(json.dumps(tc, indent=2))
+
+    flipped = mark_tokens_non_special(str(tmp_path))
+    assert flipped == ["<|inner_prefix|>", "<|inner_suffix|>"]
+
+    out_tj = json.loads((tmp_path / "tokenizer.json").read_text())
+    by_id = {e["id"]: e["special"] for e in out_tj["added_tokens"]}
+    assert by_id[32] is False and by_id[33] is False
+    assert by_id[1] is True  # unrelated special token left alone
+    out_tc = json.loads((tmp_path / "tokenizer_config.json").read_text())
+    assert out_tc["added_tokens_decoder"]["32"]["special"] is False
+    assert out_tc["added_tokens_decoder"]["33"]["special"] is False
+
+    # Idempotent: nothing left to flip on a second run.
+    assert mark_tokens_non_special(str(tmp_path)) == []
