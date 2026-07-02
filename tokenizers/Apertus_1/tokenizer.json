@@ -9028,12 +9028,6 @@
     "type": "TemplateProcessing",
     "single": [
       {
-        "SpecialToken": {
-          "id": "<s>",
-          "type_id": 0
-        }
-      },
-      {
         "Sequence": {
           "id": "A",
           "type_id": 0
@@ -9042,21 +9036,9 @@
     ],
     "pair": [
       {
-        "SpecialToken": {
-          "id": "<s>",
-          "type_id": 0
-        }
-      },
-      {
         "Sequence": {
           "id": "A",
           "type_id": 0
-        }
-      },
-      {
-        "SpecialToken": {
-          "id": "<s>",
-          "type_id": 1
         }
       },
       {

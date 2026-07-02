@@ -21,6 +21,7 @@ from .io import (
     mark_tokens_non_special,
     rename_reserved_token,
     save_tokenizer,
+    strip_bos_from_post_processor,
     write_tokenizer_config,
 )
 from .modalities import MODALITY_REGISTRY, ModalityConfig
@@ -108,6 +109,7 @@ def add_modality(
             omnimodal_config=omnimodal_config,
         )
         mark_tokens_non_special(output_path)
+        strip_bos_from_post_processor(output_path)
         stats["final_vocab_size"] = current_vocab_size
         tokenizer = AutoTokenizer.from_pretrained(output_path, use_fast=True)
         return tokenizer, stats
@@ -188,6 +190,11 @@ def add_modality(
     # them in the detokenized output under the default skip_special_tokens=True
     # (apertus-omni-tokenizer #5).
     mark_tokens_non_special(output_path)
+
+    # Drop the BOS from the post-processor: the chat template already emits it,
+    # so auto-adding it on the /completions path double-BOSes a templated prompt
+    # (apertus-program #420).
+    strip_bos_from_post_processor(output_path)
 
     # Reload after all file mutations so the returned tokenizer matches disk.
     tokenizer = AutoTokenizer.from_pretrained(output_path, use_fast=True)
