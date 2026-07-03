@@ -138,7 +138,7 @@ def add_token_alias(
     the rewritten alias only exists after normalization, so the target must match normalized input.
     Raises ValueError if ``token`` is not an added token.
 
-    The chain is rebuilt flat from the tokenizer's serialized state;
+    The normalizer is rebuilt as a single flat Sequence from the tokenizer's serialized state;
     nested Sequences lose their child rules on some tokenizers versions.
 
     This eliminates the need for manual .replace("<image>", "<|image|>")
@@ -157,19 +157,24 @@ def add_token_alias(
         raise ValueError("save=False without tokenizer= would discard the alias")
     tok = tokenizer if tokenizer is not None else AutoTokenizer.from_pretrained(save_path)
     state = json.loads(tok.backend_tokenizer.to_str())
-    entry = next((e for e in state.get("added_tokens", []) if e["content"] == token), None)
-    if entry is None:
+
+    target = next((t for t in state.get("added_tokens", []) if t["content"] == token), None)
+    if target is None:
         raise ValueError(f"Alias target {token!r} is not an added token")
-    entry["normalized"] = True
-    rule = {"type": "Replace", "pattern": {"String": alias}, "content": token}
+    target["normalized"] = True
+
     existing = state.get("normalizer")
     if existing is None:
-        state["normalizer"] = rule
+        chain = []
     elif existing["type"] == "Sequence":
-        if rule not in existing["normalizers"]:
-            existing["normalizers"].insert(0, rule)
-    elif existing != rule:
-        state["normalizer"] = {"type": "Sequence", "normalizers": [rule, existing]}
+        chain = existing["normalizers"]
+    else:
+        chain = [existing]
+    rule = {"type": "Replace", "pattern": {"String": alias}, "content": token}
+    if rule not in chain:
+        chain.insert(0, rule)
+    state["normalizer"] = {"type": "Sequence", "normalizers": chain}
+
     # transformers exposes no setter for backend_tokenizer
     tok._tokenizer = Tokenizer.from_str(json.dumps(state))
     if save:
