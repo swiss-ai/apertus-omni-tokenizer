@@ -234,3 +234,22 @@ class TestExtraConfig:
             config = json.load(f)
         assert "vision_tokenizer" in config
         assert config["vision_tokenizer"]["type"] == "Emu3.5"
+
+
+def test_is_apertus_1p5_gate():
+    """The 1.5 double-BOS fix is gated on the emitted delimiter ids: it applies
+    only when <|inner_prefix|>/<|inner_suffix|> sit at 32/33 (Apertus 1.5), and
+    is skipped for Apertus 1.0 (which has them at 69/70) so a 1.0 rebuild is left
+    unchanged."""
+    from omnitok.builder import _is_apertus_1p5
+
+    class _Tok:
+        def __init__(self, ids):
+            self._ids = ids
+
+        def convert_tokens_to_ids(self, token):
+            return self._ids.get(token, 0)
+
+    assert _is_apertus_1p5(_Tok({"<|inner_prefix|>": 32, "<|inner_suffix|>": 33}))
+    assert not _is_apertus_1p5(_Tok({"<|inner_prefix|>": 69, "<|inner_suffix|>": 70}))
+    assert not _is_apertus_1p5(_Tok({"<|inner_prefix|>": 32}))  # partial -> no

@@ -107,7 +107,8 @@ def add_modality(
             base_vocab_size,
             omnimodal_config=omnimodal_config,
         )
-        strip_bos_from_post_processor(output_path)
+        if _is_apertus_1p5(tokenizer):
+            strip_bos_from_post_processor(output_path)
         stats["final_vocab_size"] = current_vocab_size
         tokenizer = AutoTokenizer.from_pretrained(output_path, use_fast=True)
         return tokenizer, stats
@@ -186,8 +187,11 @@ def add_modality(
 
     # Drop the BOS from the post-processor: the chat template already emits it,
     # so auto-adding it on the /completions path double-BOSes a templated prompt
-    # (apertus-program #420).
-    strip_bos_from_post_processor(output_path)
+    # (apertus-program #420). Apertus 1.5 only -- gated so a rebuild of an older
+    # tokenizer (e.g. 1.0) is left unchanged and stays consistent with its
+    # checked-in artifact.
+    if _is_apertus_1p5(tokenizer):
+        strip_bos_from_post_processor(output_path)
 
     # Reload after all file mutations so the returned tokenizer matches disk.
     tokenizer = AutoTokenizer.from_pretrained(output_path, use_fast=True)
@@ -199,6 +203,17 @@ def add_modality(
 
 
 # ── Private helpers ──────────────────────────────────────────────────────────
+
+
+def _is_apertus_1p5(tokenizer) -> bool:
+    """True if this is the Apertus 1.5 tokenizer, keyed on its emitted reasoning
+    delimiter ids: ``<|inner_prefix|>``/``<|inner_suffix|>`` at 32/33. Apertus 1.0
+    carries ``<think>``/``</think>`` at 32/33 (with ``<|inner_*|>`` at 69/70), so
+    this returns False there -- the double-BOS fix is 1.5-only by design."""
+    return (
+        tokenizer.convert_tokens_to_ids("<|inner_prefix|>") == 32
+        and tokenizer.convert_tokens_to_ids("<|inner_suffix|>") == 33
+    )
 
 
 def _resolve_modality(modality: str | ModalityConfig) -> ModalityConfig:
