@@ -167,3 +167,24 @@ def test_mark_tokens_non_special_updates_special_tokens_map(tmp_path):
     assert stm["additional_special_tokens"] == ["<|keep_me|>"]
     # Idempotent: nothing left to remove.
     assert mark_tokens_non_special(str(tmp_path)) == []
+
+
+def test_mark_tokens_non_special_log_distinguishes_absent_from_already_fixed(
+    tmp_path, capsys
+):
+    """The no-op log must distinguish 'delimiters present but already
+    non-special' from 'delimiters not found' -- otherwise re-running on an
+    already-fixed dir misleadingly reports them as absent."""
+    # Present but already non-special -> "already non-special", not "not found".
+    (tmp_path / "tokenizer.json").write_text(json.dumps({
+        "added_tokens": [{"id": 32, "content": "<|inner_prefix|>", "special": False}]
+    }))
+    assert mark_tokens_non_special(str(tmp_path)) == []
+    out = capsys.readouterr().out
+    assert "already non-special" in out
+    assert "No reasoning delimiters found" not in out
+
+    # Genuinely absent -> "not found".
+    (tmp_path / "tokenizer.json").write_text(json.dumps({"added_tokens": []}))
+    assert mark_tokens_non_special(str(tmp_path)) == []
+    assert "No reasoning delimiters found" in capsys.readouterr().out

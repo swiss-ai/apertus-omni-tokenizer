@@ -198,6 +198,7 @@ def mark_tokens_non_special(
     """
     targets = set(tokens)
     flipped: set[str] = set()
+    present: set[str] = set()  # delimiters found in the files, at any `special`
 
     # tokenizer.json is up to tens of MB; a full json round-trip would reformat
     # the whole file (and risk serializer drift). Flip the one boolean in place
@@ -214,6 +215,8 @@ def mark_tokens_non_special(
             text = f.read()
         changed = 0
         for tok in targets:
+            if re.search(r'"content":\s*"' + re.escape(tok) + r'"', text):
+                present.add(tok)  # present regardless of its `special` value
             pattern = re.compile(
                 r'("content":\s*"' + re.escape(tok) + r'"[^{}]*?"special":\s*)true',
                 re.DOTALL,
@@ -240,6 +243,7 @@ def mark_tokens_non_special(
                 return t.get("content") if isinstance(t, dict) else t
 
             removed = {_content(t) for t in ast if _content(t) in targets}
+            present.update(removed)
             if removed:
                 stm["additional_special_tokens"] = [
                     t for t in ast if _content(t) not in targets
@@ -251,7 +255,10 @@ def mark_tokens_non_special(
     for tok in sorted(flipped):
         print(f"  Marked {tok} non-special")
     if not flipped:
-        print("  No reasoning delimiters found to mark non-special")
+        if present:
+            print("  Reasoning delimiters already non-special; nothing to do")
+        else:
+            print("  No reasoning delimiters found to mark non-special")
     return sorted(flipped)
 
 
