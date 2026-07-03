@@ -62,7 +62,8 @@ vision/audio tokens: a reserved block is appended on top of the base vocab, slot
 renamed into structure tokens, and one content token per codebook entry is appended.
 
 In-place extension for bases that pre-bake their omni specials (the Apertus 2 tokenizer)
-is being reworked on top of versioned recipes — see #10 for the design discussion.
+is being reworked on top of versioned recipes — see
+[PR #10](https://github.com/swiss-ai/apertus-omni-tokenizer/pull/10) for the design discussion.
 
 **Sections:** [How a tokenizer is modified](#how-a-tokenizer-is-modified) ·
 [Extension scripts & flags](#extension-scripts-cli--library) ·
@@ -80,7 +81,10 @@ Extending writes three things into the output tokenizer directory:
    matched verbatim *before* the BPE model runs, so each maps to exactly **one id** and is
    never split (a plain BPE vocab entry would fragment). Content tokens are one-per-codebook-
    entry so the model can emit them autoregressively. They are added via
-   `add_special_tokens({"additional_special_tokens": ...})`, matching the shipped 1.5 build.
+   `add_special_tokens({"additional_special_tokens": ...})`, which enrolls them in the named
+   role — on current transformers that role is serialized into `special_tokens_map.json` and
+   `all_special_ids`, so a fresh build's map is larger than the shipped 1.5 one
+   (whose clean map is an artifact of the older transformers that built it).
 2. **Modality metadata** — `omnimodal_config` in `tokenizer_config.json`: per-modality
    content `offset` and `vocab_size` (content ids are contiguous, so id = offset + index)
    plus start/end token ids. Downstream data pipelines derive the
@@ -148,7 +152,7 @@ An omni block is appended above the base text vocab:
 
 | Slots  | Modality | Tokens                                                                                                   |
 | ------ | -------- | -------------------------------------------------------------------------------------------------------- |
-| 0      | --       | `<|RESERVED_OMNI_000|>` (boundary)                                                                       |
+| 0      | --       | `<\|RESERVED_OMNI_000\|>` (boundary)                                                                     |
 | 1-7    | Vision   | img_start, img_end, img_token_start, img_end_of_row, img_end_of_frame, img_generation_start, image       |
 | 8-15   | Audio    | audio_start, audio_end, stt_transcribe, stt_continue, tts_continue, audio, stt_translate, audio_annotate |
 | 16-199 | --       | Reserved                                                                                                 |
@@ -186,8 +190,10 @@ apertus-omni-tokenizer/
 │   └── cli.py           # CLI wrapper (python -m omnitok.cli)
 ├── tests/
 │   ├── conftest.py           # shared fixtures
+│   ├── tokenizer_factory.py  # offline WordLevel tokenizer factory for tests
 │   ├── test_alias.py         # token alias tests (<image> == <|image|>)
 │   ├── test_builder.py       # add_modality tests + layout guards
+│   ├── test_instruct.py      # chat-template patching tests
 │   ├── test_chat_template.py # add chat template test
 │   ├── test_task_tokens.py   # task token contract tests
 │   └── test_tokenizers.py    # checked-in tokenizers load + special-token IDs

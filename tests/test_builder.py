@@ -13,7 +13,7 @@ from omnitok import (
     load_modality_mapping,
 )
 from omnitok.io import build_omnimodal_config
-from omnitok.modalities import MODALITY_REGISTRY, VISION, AUDIO
+from omnitok.modalities import VISION, AUDIO
 from tokenizer_factory import make_word_level_tokenizer
 
 BASE_TOKENIZER = "swiss-ai/Apertus-8B-2509"
