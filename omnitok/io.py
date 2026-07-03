@@ -212,6 +212,7 @@ def mark_tokens_non_special(
             return
         with open(path, "r", encoding="utf-8") as f:
             text = f.read()
+        changed = 0
         for tok in targets:
             pattern = re.compile(
                 r'("content":\s*"' + re.escape(tok) + r'"[^{}]*?"special":\s*)true',
@@ -220,8 +221,11 @@ def mark_tokens_non_special(
             text, n = pattern.subn(r"\1false", text)
             if n:
                 flipped.add(tok)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(text)
+                changed += n
+        # Avoid a multi-MB no-op rewrite (and mtime churn) when nothing changed.
+        if changed:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(text)
 
     _flip_in_text(os.path.join(save_path, "tokenizer.json"))
     _flip_in_text(os.path.join(save_path, "tokenizer_config.json"))
