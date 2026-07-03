@@ -265,7 +265,7 @@
                             {%- if tool_call.function %}
                                 {%- set tool_call = tool_call.function %}
                             {%- endif %}
-                            {{- '{"' + tool_call.name + '": ' + tool_call.arguments + '}' }}
+                            {{- '{"' + tool_call.name + '": ' + (tool_call.arguments if tool_call.arguments is string else tool_call.arguments | tojson) + '}' }}
                             {%- if not loop.last -%}
                                 {{- ", " }}
                             {%- endif -%}
@@ -315,7 +315,7 @@
                     {%- set tool_call = tool_call.function %}
                 {%- endif %}
                 {%- if tool_call.name and tool_call.arguments -%}
-                    {{- '{"' + tool_call.name + '": ' + tool_call.arguments + '}' }}
+                    {{- '{"' + tool_call.name + '": ' + (tool_call.arguments if tool_call.arguments is string else tool_call.arguments | tojson) + '}' }}
                     {%- if not loop.last -%}
                         {{- ", " }}
                     {%- endif -%}
