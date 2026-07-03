@@ -4,9 +4,6 @@ from __future__ import annotations
 
 import json
 
-from tokenizers import Tokenizer
-from tokenizers.models import WordLevel
-from tokenizers.pre_tokenizers import Whitespace
 from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
 from omnitok.instruct import (
@@ -14,6 +11,7 @@ from omnitok.instruct import (
     _patch_llama_chat_template,
     create_instruct_tokenizer,
 )
+from tokenizer_factory import make_word_level_tokenizer
 
 LLAMA_TEMPLATE = """{{- bos_token }}
 {%- for message in messages %}
@@ -66,18 +64,9 @@ def _make_tokenizer(chat_template: str | None = None) -> PreTrainedTokenizerFast
         "<|assistant_start|>",
         "<|assistant_end|>",
     ]
-    vocab = {token: idx for idx, token in enumerate(tokens)}
-    tokenizer = Tokenizer(WordLevel(vocab, unk_token="<unk>"))
-    tokenizer.pre_tokenizer = Whitespace()
-    fast = PreTrainedTokenizerFast(
-        tokenizer_object=tokenizer,
-        bos_token="<s>",
-        eos_token="</s>",
-        unk_token="<unk>",
+    return make_word_level_tokenizer(
+        tokens, whitespace=True, bos_eos=True, chat_template=chat_template
     )
-    if chat_template is not None:
-        fast.chat_template = chat_template
-    return fast
 
 
 def _save_tokenizer(path, chat_template: str | None = None) -> None:
