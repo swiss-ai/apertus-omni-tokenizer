@@ -98,23 +98,18 @@ class TestStackedAlias:
 
 
 class TestAliasNormalizerChain:
-    """Regression: adding an alias must not drop earlier normalizer rules.
-
-    Wrapping a getter-derived Sequence in a new Sequence silently loses its
-    children on some tokenizers versions, so a second alias used to erase
-    the first, and a Sequence base normalizer lost e.g. its NFC step.
-    These fixtures are synthetic (no network, no full build).
-    """
+    """Aliases must not drop earlier normalizer rules or depend on the target's normalized flag.
+    Synthetic bases -- no network, no build."""
 
     @staticmethod
-    def _make_base(tmp_path, base_normalizer):
+    def _make_base(tmp_path, base_normalizer, normalized=True):
         backend = Tokenizer(models.WordLevel({"<unk>": 0, "hi": 1}, unk_token="<unk>"))
         backend.normalizer = base_normalizer
         tok = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="<unk>")
         tok.add_tokens(
             [
-                AddedToken("<|image|>", special=True, normalized=True),
-                AddedToken("<|audio|>", special=True, normalized=True),
+                AddedToken("<|image|>", special=True, normalized=normalized),
+                AddedToken("<|audio|>", special=True, normalized=normalized),
             ]
         )
         out = str(tmp_path / "base")
@@ -127,18 +122,21 @@ class TestAliasNormalizerChain:
         assert chain["type"] == "Sequence"
         return [n["type"] for n in chain["normalizers"]]
 
+    @staticmethod
+    def _assert_aliases_resolve(base):
+        tok = AutoTokenizer.from_pretrained(base)
+        for alias, target in (("<image>", "<|image|>"), ("<audio>", "<|audio|>")):
+            tid = tok.convert_tokens_to_ids(target)
+            assert tok.encode(alias, add_special_tokens=False) == [tid]
+            assert tok.encode(target, add_special_tokens=False) == [tid]
+        return tok
+
     def test_second_alias_keeps_first_and_base_normalizer(self, tmp_path):
         base = self._make_base(tmp_path, normalizers.NFC())
         add_token_alias(base, "<|image|>", "<image>")
         add_token_alias(base, "<|audio|>", "<audio>")
 
-        tok = AutoTokenizer.from_pretrained(base)
-        img = tok.convert_tokens_to_ids("<|image|>")
-        aud = tok.convert_tokens_to_ids("<|audio|>")
-        assert tok.encode("<image>", add_special_tokens=False) == [img]
-        assert tok.encode("<audio>", add_special_tokens=False) == [aud]
-
-        types = self._chain_types(tok)
+        types = self._chain_types(self._assert_aliases_resolve(base))
         assert types.count("Replace") == 2
         assert "NFC" in types
 
@@ -162,8 +160,40 @@ class TestAliasNormalizerChain:
         add_token_alias(base, "<|audio|>", "<audio>", tokenizer=tok, save=False)
         tok.save_pretrained(base)
 
+        self._assert_aliases_resolve(base)
+
+    def test_alias_target_flag_set_at_creation(self, tmp_path):
+        """A normalized=False target is switched to True, in both saved files."""
+        base = self._make_base(tmp_path, normalizers.NFC(), normalized=False)
+        add_token_alias(base, "<|image|>", "<image>")
+        add_token_alias(base, "<|audio|>", "<audio>")
+        self._assert_aliases_resolve(base)
+
+        with open(f"{base}/tokenizer.json") as f:
+            tj = json.load(f)
+        flags = {e["content"]: e["normalized"] for e in tj["added_tokens"]}
+        assert flags["<|image|>"] is True and flags["<|audio|>"] is True
+        with open(f"{base}/tokenizer_config.json") as f:
+            cfg = json.load(f)
+        cfg_flags = {
+            e["content"]: e["normalized"] for e in cfg["added_tokens_decoder"].values()
+        }
+        assert cfg_flags["<|image|>"] is True and cfg_flags["<|audio|>"] is True
+
+    def test_realias_is_idempotent(self, tmp_path):
+        base = self._make_base(tmp_path, normalizers.NFC())
+        add_token_alias(base, "<|image|>", "<image>")
+        add_token_alias(base, "<|image|>", "<image>")
+
         tok = AutoTokenizer.from_pretrained(base)
-        img = tok.convert_tokens_to_ids("<|image|>")
-        aud = tok.convert_tokens_to_ids("<|audio|>")
-        assert tok.encode("<image>", add_special_tokens=False) == [img]
-        assert tok.encode("<audio>", add_special_tokens=False) == [aud]
+        assert self._chain_types(tok).count("Replace") == 1
+
+    def test_unknown_alias_target_raises(self, tmp_path):
+        base = self._make_base(tmp_path, normalizers.NFC())
+        with pytest.raises(ValueError, match="not an added token"):
+            add_token_alias(base, "<|missing|>", "<missing>")
+
+    def test_save_false_without_tokenizer_raises(self, tmp_path):
+        base = self._make_base(tmp_path, normalizers.NFC())
+        with pytest.raises(ValueError, match="discard"):
+            add_token_alias(base, "<|image|>", "<image>", save=False)
