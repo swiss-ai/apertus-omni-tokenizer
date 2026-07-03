@@ -40,7 +40,7 @@ from typing import Any
 
 from huggingface_hub import snapshot_download
 from huggingface_hub.utils import HFValidationError, RepositoryNotFoundError
-from tokenizers import normalizers
+from tokenizers import Tokenizer
 from transformers import AutoTokenizer
 
 from .modalities import MODALITY_REGISTRY, ModalityConfig
@@ -133,10 +133,16 @@ def add_token_alias(
 ) -> None:
     """Make ``alias`` encode to the same token ID as ``token``.
 
-    Prepends a normalizers.Replace(alias, token) to the tokenizer's
-    normalizer chain. The target token must have been created with
+    Prepends a Replace(alias, token) rule to the tokenizer's normalizer
+    chain. The target token must have been created with
     AddedToken(normalized=True) so the matcher checks normalized input
     (where the alias has already been rewritten).
+
+    The chain is rebuilt from the tokenizer's serialized state rather
+    than by wrapping ``backend.normalizer`` in a new Sequence: nesting a
+    getter-derived Sequence inside another Sequence silently drops its
+    child rules (so a second alias would erase the first, and a base
+    Sequence normalizer would lose e.g. its NFC step).
 
     This eliminates the need for manual .replace("<image>", "<|image|>")
     calls in data loaders and conversation transforms.
@@ -151,12 +157,16 @@ def add_token_alias(
         # Now tokenizer.encode("<image>") == tokenizer.encode("<|image|>")
     """
     tok = tokenizer if tokenizer is not None else AutoTokenizer.from_pretrained(save_path)
-    backend = tok.backend_tokenizer
-    replace = normalizers.Replace(alias, token)
-    existing = backend.normalizer
-    backend.normalizer = (
-        normalizers.Sequence([replace, existing]) if existing else replace
-    )
+    state = json.loads(tok.backend_tokenizer.to_str())
+    rule = {"type": "Replace", "pattern": {"String": alias}, "content": token}
+    existing = state.get("normalizer")
+    if existing is None:
+        state["normalizer"] = rule
+    elif existing["type"] == "Sequence":
+        existing["normalizers"].insert(0, rule)
+    else:
+        state["normalizer"] = {"type": "Sequence", "normalizers": [rule, existing]}
+    tok._tokenizer = Tokenizer.from_str(json.dumps(state))
     if save:
         tok.save_pretrained(save_path)
     print(f"  Added alias {alias} -> {token}")

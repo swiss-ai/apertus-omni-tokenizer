@@ -5,8 +5,13 @@ as a manual string replacement, making dataloader-side transforms
 (e.g. llava_to_apertus) unnecessary for the image/audio token.
 """
 
+import json
+
 import pytest
-from transformers import AutoTokenizer
+from tokenizers import Tokenizer, models, normalizers
+from transformers import AddedToken, AutoTokenizer, PreTrainedTokenizerFast
+
+from omnitok.io import add_token_alias
 
 
 class TestVisionAlias:
@@ -90,3 +95,75 @@ class TestStackedAlias:
             text.replace("<image>", "<|image|>").replace("<audio>", "<|audio|>")
         )
         assert ids_alias == ids_canonical
+
+
+class TestAliasNormalizerChain:
+    """Regression: adding an alias must not drop earlier normalizer rules.
+
+    Wrapping a getter-derived Sequence in a new Sequence silently loses its
+    children on some tokenizers versions, so a second alias used to erase
+    the first, and a Sequence base normalizer lost e.g. its NFC step.
+    These fixtures are synthetic (no network, no full build).
+    """
+
+    @staticmethod
+    def _make_base(tmp_path, base_normalizer):
+        backend = Tokenizer(models.WordLevel({"<unk>": 0, "hi": 1}, unk_token="<unk>"))
+        backend.normalizer = base_normalizer
+        tok = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="<unk>")
+        tok.add_tokens(
+            [
+                AddedToken("<|image|>", special=True, normalized=True),
+                AddedToken("<|audio|>", special=True, normalized=True),
+            ]
+        )
+        out = str(tmp_path / "base")
+        tok.save_pretrained(out)
+        return out
+
+    @staticmethod
+    def _chain_types(tok):
+        chain = json.loads(tok.backend_tokenizer.to_str())["normalizer"]
+        assert chain["type"] == "Sequence"
+        return [n["type"] for n in chain["normalizers"]]
+
+    def test_second_alias_keeps_first_and_base_normalizer(self, tmp_path):
+        base = self._make_base(tmp_path, normalizers.NFC())
+        add_token_alias(base, "<|image|>", "<image>")
+        add_token_alias(base, "<|audio|>", "<audio>")
+
+        tok = AutoTokenizer.from_pretrained(base)
+        img = tok.convert_tokens_to_ids("<|image|>")
+        aud = tok.convert_tokens_to_ids("<|audio|>")
+        assert tok.encode("<image>", add_special_tokens=False) == [img]
+        assert tok.encode("<audio>", add_special_tokens=False) == [aud]
+
+        types = self._chain_types(tok)
+        assert types.count("Replace") == 2
+        assert "NFC" in types
+
+    def test_sequence_base_normalizer_survives(self, tmp_path):
+        base = self._make_base(
+            tmp_path, normalizers.Sequence([normalizers.NFC(), normalizers.NFKC()])
+        )
+        add_token_alias(base, "<|image|>", "<image>")
+
+        tok = AutoTokenizer.from_pretrained(base)
+        img = tok.convert_tokens_to_ids("<|image|>")
+        assert tok.encode("<image>", add_special_tokens=False) == [img]
+
+        types = self._chain_types(tok)
+        assert "NFC" in types and "NFKC" in types
+
+    def test_batched_in_memory_aliases(self, tmp_path):
+        base = self._make_base(tmp_path, normalizers.NFC())
+        tok = AutoTokenizer.from_pretrained(base)
+        add_token_alias(base, "<|image|>", "<image>", tokenizer=tok, save=False)
+        add_token_alias(base, "<|audio|>", "<audio>", tokenizer=tok, save=False)
+        tok.save_pretrained(base)
+
+        tok = AutoTokenizer.from_pretrained(base)
+        img = tok.convert_tokens_to_ids("<|image|>")
+        aud = tok.convert_tokens_to_ids("<|audio|>")
+        assert tok.encode("<image>", add_special_tokens=False) == [img]
+        assert tok.encode("<audio>", add_special_tokens=False) == [aud]
