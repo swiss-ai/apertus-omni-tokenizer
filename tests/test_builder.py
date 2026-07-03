@@ -6,9 +6,6 @@ import os
 import pytest
 from transformers import AutoTokenizer
 
-from tokenizers import Tokenizer, models
-from transformers import PreTrainedTokenizerFast
-
 from omnitok import (
     add_modality,
     detect_existing_modalities,
@@ -17,6 +14,7 @@ from omnitok import (
 )
 from omnitok.io import build_omnimodal_config
 from omnitok.modalities import MODALITY_REGISTRY, VISION, AUDIO
+from tokenizer_factory import make_word_level_tokenizer
 
 BASE_TOKENIZER = "swiss-ai/Apertus-8B-2509"
 SMALL_VOCAB = 32
@@ -265,10 +263,7 @@ class TestExtraConfig:
 class TestOmnimodalDerivation:
     @staticmethod
     def _synthetic(tokens):
-        backend = Tokenizer(models.WordLevel({"<unk>": 0}, unk_token="<unk>"))
-        tok = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="<unk>")
-        tok.add_tokens(tokens)
-        return tok
+        return make_word_level_tokenizer(added_tokens=tokens)
 
     def test_derives_offset_and_vocab_size(self):
         tok = self._synthetic(
@@ -323,6 +318,8 @@ class TestShipped1p5:
         assert det["modalities"]["audio"]["vocab_size"] == 4096
 
     def test_content_token_id(self):
-        assert get_content_token_id(0, SHIPPED_1P5, "vision") == 131272
-        assert get_content_token_id(131071, SHIPPED_1P5, "vision") == 131272 + 131071
-        assert get_content_token_id(4095, SHIPPED_1P5, "audio") == 262344 + 4095
+        vision = load_modality_mapping(SHIPPED_1P5, "vision")
+        audio = load_modality_mapping(SHIPPED_1P5, "audio")
+        assert get_content_token_id(0, mapping=vision) == 131272
+        assert get_content_token_id(131071, mapping=vision) == 131272 + 131071
+        assert get_content_token_id(4095, mapping=audio) == 262344 + 4095
