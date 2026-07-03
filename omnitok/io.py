@@ -232,14 +232,15 @@ def mark_tokens_non_special(
             stm = json.load(f)
         ast = stm.get("additional_special_tokens")
         if isinstance(ast, list):
-            kept = [
-                t
-                for t in ast
-                if (t.get("content") if isinstance(t, dict) else t) not in targets
-            ]
-            if len(kept) != len(ast):
-                stm["additional_special_tokens"] = kept
-                flipped.update(targets)
+            def _content(t):
+                return t.get("content") if isinstance(t, dict) else t
+
+            removed = {_content(t) for t in ast if _content(t) in targets}
+            if removed:
+                stm["additional_special_tokens"] = [
+                    t for t in ast if _content(t) not in targets
+                ]
+                flipped.update(removed)  # only tokens actually present/removed
                 with open(stm_path, "w", encoding="utf-8") as f:
                     json.dump(stm, f, ensure_ascii=False, indent=2)
 

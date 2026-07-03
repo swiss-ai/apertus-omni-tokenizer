@@ -147,3 +147,23 @@ def test_mark_tokens_non_special_flips_and_is_idempotent(tmp_path):
 
     # Idempotent: nothing left to flip on a second run.
     assert mark_tokens_non_special(str(tmp_path)) == []
+
+
+def test_mark_tokens_non_special_updates_special_tokens_map(tmp_path):
+    """The special_tokens_map.json branch drops reasoning delimiters from
+    additional_special_tokens, leaves unrelated tokens, and reports ONLY the
+    tokens actually removed -- not every candidate that happens to be absent."""
+    # Only <|inner_prefix|> is present; the other three candidates are absent.
+    (tmp_path / "tokenizer.json").write_text(json.dumps({"added_tokens": []}))
+    (tmp_path / "special_tokens_map.json").write_text(json.dumps({
+        "additional_special_tokens": ["<|inner_prefix|>", "<|keep_me|>"]
+    }))
+
+    flipped = mark_tokens_non_special(str(tmp_path))
+
+    # Reports the one present delimiter, NOT <|inner_suffix|>/<think>/</think>.
+    assert flipped == ["<|inner_prefix|>"]
+    stm = json.loads((tmp_path / "special_tokens_map.json").read_text())
+    assert stm["additional_special_tokens"] == ["<|keep_me|>"]
+    # Idempotent: nothing left to remove.
+    assert mark_tokens_non_special(str(tmp_path)) == []
