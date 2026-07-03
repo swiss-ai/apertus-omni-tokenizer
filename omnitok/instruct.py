@@ -157,7 +157,7 @@ def create_instruct_tokenizer(
     existing = detect_existing_modalities(base_tokenizer_path)
     if not existing["modalities"]:
         raise ValueError(
-            f"No modality mapping files found in {base_tokenizer_path}. "
+            f"No omni modalities found in {base_tokenizer_path}'s tokenizer_config. "
             f"Create an omni-tokenizer first with `add_modality()`."
         )
     print(f"Detected modalities: {list(existing['modalities'].keys())}")

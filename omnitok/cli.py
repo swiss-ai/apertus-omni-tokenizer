@@ -14,20 +14,11 @@ def cmd_add_modality(args: argparse.Namespace) -> None:
     if args.extra_config:
         extra_config = json.loads(args.extra_config)
 
-    slot_assignments = None
-    if args.slot_assignments:
-        slot_assignments = json.loads(args.slot_assignments)
-
     add_modality(
         input_tokenizer_path=args.input_tokenizer,
         output_path=args.output_path,
         modality=args.modality,
         vocab_size=args.vocab_size,
-        allocation=args.allocation,
-        slot_assignments=slot_assignments,
-        reserve_pool_pattern=args.reserve_pool_pattern,
-        allow_existing=args.allow_existing,
-        dry_run=args.dry_run,
         num_reserved_tokens=args.num_reserved_tokens,
         extra_config=extra_config,
     )
@@ -72,33 +63,8 @@ def main() -> None:
         help="Number of content tokens (codebook size).",
     )
     p_add.add_argument(
-        "--allocation", choices=["append", "in_place"], default="append",
-        help="append (default): add a RESERVED_OMNI block on top. in_place: reuse "
-             "pre-baked specials + the <SPECIAL_*> reserve pool in the base vocab.",
-    )
-    p_add.add_argument(
-        "--slot-assignments", type=str, default=None,
-        help='in_place only: JSON map of explicit slot overrides. Each value is a pool '
-             'ordinal (the N in <SPECIAL_N>) or a full reserve-token name, e.g. '
-             '\'{"<|img_start|>": 40}\' or \'{"<|img_start|>": "<SPECIAL_40>"}\'.',
-    )
-    p_add.add_argument(
-        "--reserve-pool-pattern", type=str, default=None,
-        help="in_place only: override the reserve-pool regex (one capture group = the "
-             "ordinal), e.g. matching <extra_id_0>, <extra_id_1>, ...",
-    )
-    p_add.add_argument(
-        "--allow-existing", action=argparse.BooleanOptionalAction, default=True,
-        help="Accept (skip) tokens that already exist. --no-allow-existing raises "
-             "on any unexpected pre-existing token (default: allow).",
-    )
-    p_add.add_argument(
-        "--dry-run", action="store_true",
-        help="Resolve and print the change report without writing anything.",
-    )
-    p_add.add_argument(
         "--num-reserved-tokens", type=int, default=200,
-        help="append mode: number of RESERVED_OMNI slots (default: 200).",
+        help="Number of RESERVED_OMNI slots (default: 200).",
     )
     p_add.add_argument(
         "--extra-config", type=str, default=None,
