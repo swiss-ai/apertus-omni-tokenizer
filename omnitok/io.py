@@ -201,34 +201,46 @@ def mark_tokens_non_special(
     present: set[str] = set()  # delimiters found in the files, at any `special`
 
     # tokenizer.json is up to tens of MB; a full json round-trip would reformat
-    # the whole file (and risk serializer drift). Flip the one boolean in place
-    # with a surgical text substitution that leaves every other byte untouched.
-    # The same added-token object shape ({"content": TOK, ..., "special": true})
-    # appears in tokenizer.json's `added_tokens` list and in
-    # tokenizer_config.json's `added_tokens_decoder` map, so one regex covers
-    # both. Added-token objects contain no nested braces, so [^{}] stays inside
-    # the object and reaches only that token's own `special` flag.
+    # the whole file (and risk serializer drift). Flip the one boolean in place.
+    # An added-token entry is a *flat* JSON object (no nested braces) carrying
+    # BOTH a "content" string and a "special" bool -- e.g.
+    #   {"id": 32, "content": "<|inner_prefix|>", ..., "special": true}
+    # This shape appears in tokenizer.json's `added_tokens` list and in
+    # tokenizer_config.json's `added_tokens_decoder` map. Matching flat objects
+    # and requiring both fields is what keeps a normalizer `Replace` rule -- which
+    # also mentions the token in "content" but has a nested "pattern" object and
+    # no "special" -- from being mistaken for a patchable delimiter, and makes the
+    # flip independent of the order of the "content"/"special" keys.
+    flat_obj = re.compile(r"\{[^{}]*\}", re.DOTALL)
+
     def _flip_in_text(path: str) -> None:
         if not os.path.exists(path):
             return
         with open(path, "r", encoding="utf-8") as f:
             text = f.read()
-        changed = 0
-        for tok in targets:
-            if re.search(r'"content":\s*"' + re.escape(tok) + r'"', text):
-                present.add(tok)  # present regardless of its `special` value
-            pattern = re.compile(
-                r'("content":\s*"' + re.escape(tok) + r'"[^{}]*?"special":\s*)true',
-                re.DOTALL,
-            )
-            text, n = pattern.subn(r"\1false", text)
+        n_changed = 0
+
+        def _patch(match):
+            nonlocal n_changed
+            obj = match.group(0)
+            content = re.search(r'"content"\s*:\s*"([^"]*)"', obj)
+            if content is None or content.group(1) not in targets:
+                return obj
+            if re.search(r'"special"\s*:\s*(?:true|false)', obj) is None:
+                return obj  # not an added-token entry (e.g. a normalizer rule)
+            tok = content.group(1)
+            present.add(tok)  # present regardless of its `special` value
+            new_obj, n = re.subn(r'("special"\s*:\s*)true', r"\1false", obj)
             if n:
                 flipped.add(tok)
-                changed += n
+                n_changed += n
+            return new_obj
+
+        new_text = flat_obj.sub(_patch, text)
         # Avoid a multi-MB no-op rewrite (and mtime churn) when nothing changed.
-        if changed:
+        if n_changed:
             with open(path, "w", encoding="utf-8") as f:
-                f.write(text)
+                f.write(new_text)
 
     _flip_in_text(os.path.join(save_path, "tokenizer.json"))
     _flip_in_text(os.path.join(save_path, "tokenizer_config.json"))

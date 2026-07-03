@@ -188,3 +188,40 @@ def test_mark_tokens_non_special_log_distinguishes_absent_from_already_fixed(
     (tmp_path / "tokenizer.json").write_text(json.dumps({"added_tokens": []}))
     assert mark_tokens_non_special(str(tmp_path)) == []
     assert "No reasoning delimiters found" in capsys.readouterr().out
+
+
+def test_mark_tokens_non_special_ignores_non_added_token_refs_and_key_order(
+    tmp_path, capsys
+):
+    """Presence/flip key on flat objects carrying BOTH content and special. A
+    normalizer Replace rule that only mentions the token (nested pattern, no
+    special) -- as the real Apertus 1.5 tokenizer.json has for <|inner_prefix|>
+    -- must not be treated as a delimiter, and a reversed content/special key
+    order must still flip."""
+    tj = {
+        # Replace rule: references the token in "content" but is NOT an
+        # added-token entry (nested "pattern" object, no "special").
+        "normalizer": {
+            "type": "Sequence",
+            "normalizers": [
+                {"type": "Replace",
+                 "pattern": {"String": "<think>"},
+                 "content": "<|inner_prefix|>"},
+            ],
+        },
+        # Reversed key order: "special" before "content".
+        "added_tokens": [
+            {"id": 33, "special": True, "content": "<|inner_suffix|>"},
+        ],
+    }
+    (tmp_path / "tokenizer.json").write_text(json.dumps(tj, indent=2))
+
+    flipped = mark_tokens_non_special(str(tmp_path))
+
+    # inner_suffix flips despite reversed key order; inner_prefix is untouched
+    # and not even reported "present" (it only appears in the Replace rule).
+    assert flipped == ["<|inner_suffix|>"]
+    assert "<|inner_prefix|>" not in capsys.readouterr().out
+    out = json.loads((tmp_path / "tokenizer.json").read_text())
+    assert out["added_tokens"][0]["special"] is False
+    assert out["normalizer"]["normalizers"][0]["content"] == "<|inner_prefix|>"
