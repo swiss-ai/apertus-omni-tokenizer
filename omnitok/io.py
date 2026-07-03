@@ -24,10 +24,9 @@ original text-only size (e.g. 131072).  Always use ``len(tokenizer)`` or
 Call flow (driven by builder.add_modality):
 
     save_tokenizer()              # save HF tokenizer + write base metadata
-    copy_modality_mapping_files() # preserve existing mapping JSONs when stacking
     rename_reserved_token()       # e.g. <|RESERVED_OMNI_001|> -> <|img_start|>
     add_token_alias()             # e.g. <image> encodes to same ID as <|image|>
-    build_omnimodal_config()      # derive omnimodal metadata from mapping files
+    build_omnimodal_config()      # derive omnimodal metadata from the tokenizer
     write_tokenizer_config()      # write all custom tokenizer_config.json fields
 """
 
@@ -35,7 +34,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 from typing import Any
 
 from huggingface_hub import snapshot_download
@@ -182,8 +180,8 @@ def write_tokenizer_config(
     - ``vocab_size`` gets overwritten with the base-model vocab size
       because ``tokenizer.vocab_size`` excludes added tokens.
     - ``base_vocab_size`` and ``added_tokens_count`` are project-specific.
-    - ``omnimodal_config`` is derived from mapping JSONs written outside
-      the tokenizer object itself.
+    - ``omnimodal_config`` is derived metadata the tokenizer object
+      itself does not carry.
 
     This helper centralizes those post-save corrections in one place.
     """
@@ -240,125 +238,101 @@ def save_tokenizer(
 # ── Modality detection ────────────────────────────────────────────────────────
 
 
-def detect_existing_modalities(
-    tokenizer_path: str,
-    registry: dict[str, ModalityConfig] | None = None,
-) -> dict[str, Any]:
+def _read_tokenizer_config(local_path: str) -> dict[str, Any]:
+    config_path = os.path.join(local_path, "tokenizer_config.json")
+    if not os.path.exists(config_path):
+        return {}
+    with open(config_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def detect_existing_modalities(tokenizer_path: str) -> dict[str, Any]:
     """Detect which modalities already exist in a tokenizer directory.
 
     Accepts both local paths and HuggingFace Hub model IDs (e.g.
     ``"swiss-ai/Apertus-8B-2509"``).  Hub IDs are resolved to the local
     cache automatically.
 
-    Checks for modality mapping files (e.g. vision_token_mapping.json)
-    and reads base_vocab_size from tokenizer_config.json.
+    Reads base_vocab_size and omnimodal_config from tokenizer_config.json.
 
     Returns::
 
         {
             "base_vocab_size": 131072,
             "modalities": {
-                "vision": {"mapping_file": "...", "vocab_size": 131072},
-                "audio":  {"mapping_file": "...", "vocab_size": 4096},
+                "vision": {"vocab_size": 131072},
+                "audio":  {"vocab_size": 4096},
             }
         }
 
     Used by builder.add_modality() for idempotency checks and stacking.
     """
-    if registry is None:
-        registry = MODALITY_REGISTRY
-
-    local_path = _resolve_tokenizer_path(tokenizer_path)
-    result: dict[str, Any] = {"base_vocab_size": None, "modalities": {}}
-
-    config_path = os.path.join(local_path, "tokenizer_config.json")
-    if os.path.exists(config_path):
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
-        result["base_vocab_size"] = config.get("base_vocab_size")
-
-    for name, mc in registry.items():
-        mapping_path = os.path.join(local_path, mc.mapping_file)
-        if os.path.exists(mapping_path):
-            with open(mapping_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            result["modalities"][name] = {
-                "mapping_file": mc.mapping_file,
-                "vocab_size": data.get(mc.vocab_size_key),
-            }
-
+    config = _read_tokenizer_config(_resolve_tokenizer_path(tokenizer_path))
+    result: dict[str, Any] = {
+        "base_vocab_size": config.get("base_vocab_size"),
+        "modalities": {},
+    }
+    for entry in config.get("omnimodal_config", {}).get("modalities", []):
+        if (name := entry.get("name")) is not None:
+            result["modalities"][name] = {"vocab_size": entry.get("vocab_size")}
     return result
-
-
-def copy_modality_mapping_files(
-    existing_modalities: dict[str, Any],
-    input_path: str,
-    output_path: str,
-) -> None:
-    """Copy existing modality mapping files from input to output.
-
-    When stacking (e.g. adding audio on top of vision), the vision
-    mapping file must be preserved in the output directory.
-
-    Accepts Hub model IDs as ``input_path`` — resolved to local cache
-    before copying.
-    """
-    local_input = _resolve_tokenizer_path(input_path)
-    modalities = existing_modalities.get("modalities") or {}
-    for info in modalities.values():
-        src = os.path.join(local_input, info["mapping_file"])
-        dst = os.path.join(output_path, info["mapping_file"])
-        if os.path.exists(src) and os.path.abspath(src) != os.path.abspath(dst):
-            shutil.copy(src, dst)
-            print(f"  Copied {info['mapping_file']}")
 
 
 # ── Omnimodal config ──────────────────────────────────────────────────────────
 
 
-def read_modality_info(
-    output_path: str, mc: ModalityConfig, tokenizer
-) -> dict[str, Any] | None:
-    """Read a single modality's summary from its mapping file.
+def read_modality_info(mc: ModalityConfig, vocab: dict[str, int]) -> dict[str, Any] | None:
+    """Derive a single modality's summary from the tokenizer vocabulary.
 
     Returns {name, offset, vocab_size, start_token, end_token} or None
-    if the mapping file is missing or the structure tokens are not in
-    the vocabulary yet.
+    if the modality's content or structure tokens are not in the vocabulary.
+    Walks the content tokens from index 0, verifying id = offset + index as it counts them —
+    every config this feeds is only written for contiguous ids,
+    which is what lets consumers look tokens up by offset arithmetic.
+
+    Raises:
+        ValueError: If the content ids have a gap — a renumbered or missing
+            token (corrupted or hand-edited tokenizer).
     """
-    mapping_path = os.path.join(output_path, mc.mapping_file)
-    if not os.path.exists(mapping_path):
+    offset = vocab.get(mc.content_token_format.format(i=0))
+    start_id = vocab.get(mc.start_token)
+    end_id = vocab.get(mc.end_token)
+    if offset is None or start_id is None or end_id is None:
         return None
 
-    with open(mapping_path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    if mc.offset_key not in data:
-        return None
-
-    start_id = tokenizer.convert_tokens_to_ids(mc.start_token)
-    end_id = tokenizer.convert_tokens_to_ids(mc.end_token)
-    if start_id == tokenizer.unk_token_id or end_id == tokenizer.unk_token_id:
-        return None
+    count = 0
+    while (token_id := vocab.get(mc.content_token_format.format(i=count))) is not None:
+        if token_id != offset + count:
+            raise ValueError(
+                f"{mc.content_token_format.format(i=count)} has id {token_id}, "
+                f"expected {offset + count}: {mc.name} content ids are not contiguous"
+            )
+        count += 1
+    prefix, suffix = mc.content_token_format.split("{i}")
+    total = sum(1 for t in vocab if t.startswith(prefix) and t.endswith(suffix))
+    if total != count:
+        raise ValueError(
+            f"{mc.name} has {total} content tokens in the vocab but only "
+            f"{count} are contiguous from index 0"
+        )
 
     return {
         "name": mc.name,
-        "offset": data[mc.offset_key],
-        "vocab_size": data.get(mc.vocab_size_key),
+        "offset": offset,
+        "vocab_size": count,
         "start_token": start_id,
         "end_token": end_id,
     }
 
 
 def build_omnimodal_config(
-    output_path: str,
     base_vocab_size: int,
     tokenizer,
     registry: dict[str, ModalityConfig] | None = None,
 ) -> dict[str, Any]:
-    """Build omnimodal_config from all present modality mapping files.
+    """Build omnimodal_config for every registered modality present in the tokenizer.
 
-    Scans for each registered modality's mapping file, reads its summary,
-    and assembles them sorted by content token offset::
+    Assembles the summaries sorted by content token offset::
 
         {
             "omni_special_token_offset": 131072,
@@ -373,10 +347,11 @@ def build_omnimodal_config(
     if registry is None:
         registry = MODALITY_REGISTRY
 
+    vocab = tokenizer.get_vocab()
     modalities = [
         info
         for mc in registry.values()
-        if (info := read_modality_info(output_path, mc, tokenizer)) is not None
+        if (info := read_modality_info(mc, vocab)) is not None
     ]
 
     if not modalities:
@@ -393,26 +368,28 @@ def build_omnimodal_config(
 
 
 def load_modality_mapping(tokenizer_path: str, modality_name: str) -> dict:
-    """Load a modality's token mapping JSON (e.g. vision_token_mapping.json).
+    """Return a modality's entry from the tokenizer's omnimodal_config.
 
     Accepts both local paths and HuggingFace Hub model IDs.
 
-    Returns the full mapping dict containing token IDs, offset, vocab size.
-    Used by downstream code to convert codebook indices to token IDs.
+    Returns the entry dict ({name, offset, vocab_size, start_token, end_token}).
+    Content ids are contiguous, so id = offset + index.
 
     Raises:
-        ValueError: If modality_name is not in the registry.
-        FileNotFoundError: If the mapping file does not exist.
+        ValueError: If the modality is not present in the tokenizer.
     """
-    if modality_name not in MODALITY_REGISTRY:
-        raise ValueError(f"Unknown modality: {modality_name}")
-    mc = MODALITY_REGISTRY[modality_name]
-    local_path = _resolve_tokenizer_path(tokenizer_path)
-    mapping_path = os.path.join(local_path, mc.mapping_file)
-    if not os.path.exists(mapping_path):
-        raise FileNotFoundError(f"Mapping not found: {mapping_path}")
-    with open(mapping_path, "r") as f:
-        return json.load(f)
+    config = _read_tokenizer_config(_resolve_tokenizer_path(tokenizer_path))
+    entry = next(
+        (
+            m
+            for m in config.get("omnimodal_config", {}).get("modalities", [])
+            if m.get("name") == modality_name
+        ),
+        None,
+    )
+    if entry is None:
+        raise ValueError(f"{modality_name} not present in {tokenizer_path}")
+    return entry
 
 
 def get_content_token_id(
@@ -421,7 +398,7 @@ def get_content_token_id(
     modality_name: str = "vision",
     mapping: dict | None = None,
 ) -> int:
-    """Convert a codebook index to its token ID.
+    """Convert a codebook index to its token ID (offset + index).
 
     Pass tokenizer_path for one-off lookups, or pass a pre-loaded mapping
     dict for batch lookups to avoid repeated file reads::
@@ -438,12 +415,10 @@ def get_content_token_id(
     """
     if mapping is None:
         mapping = load_modality_mapping(tokenizer_path, modality_name)
-    mc = MODALITY_REGISTRY[modality_name]
-    token_ids = mapping.get(f"{mc.name}_token_ids", {})
-    key = str(index)
-    if key in token_ids:
-        return token_ids[key]
-    raise ValueError(
-        f"{modality_name} index {index} not found. "
-        f"Valid range: 0-{mapping.get(mc.vocab_size_key, '?')}"
-    )
+    vocab_size = mapping["vocab_size"]
+    if not 0 <= index < vocab_size:
+        raise ValueError(
+            f"{modality_name} index {index} not found. "
+            f"Valid range: 0-{vocab_size - 1}"
+        )
+    return mapping["offset"] + index

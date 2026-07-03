@@ -94,17 +94,24 @@ def _save_tokenizer(path, chat_template: str | None = None) -> None:
         json.dump(config, f, indent=2)
 
 
-def _write_audio_mapping(path) -> None:
-    with open(path / "audio_token_mapping.json", "w", encoding="utf-8") as f:
-        json.dump(
+def _write_omnimodal_config(path) -> None:
+    config_path = path / "tokenizer_config.json"
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = json.load(f)
+    config["omnimodal_config"] = {
+        "omni_special_token_offset": 1000,
+        "modalities": [
             {
-                "audio_token_offset": 1000,
-                "audio_vocab_size": 1,
-                "audio_token_ids": {"0": 3},
-            },
-            f,
-            indent=2,
-        )
+                "name": "audio",
+                "offset": 1000,
+                "vocab_size": 1,
+                "start_token": 3,
+                "end_token": 3,
+            }
+        ],
+    }
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
 
 
 class TestTemplatePatching:
@@ -153,7 +160,7 @@ def test_create_instruct_tokenizer_saves_audio_aware_chat_template(tmp_path):
     output_dir = tmp_path / "output"
 
     _save_tokenizer(base_dir)
-    _write_audio_mapping(base_dir)
+    _write_omnimodal_config(base_dir)
     _save_tokenizer(instruct_dir, APERTUS_TEMPLATE)
 
     create_instruct_tokenizer(str(base_dir), str(instruct_dir), str(output_dir))
