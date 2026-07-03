@@ -31,6 +31,26 @@ jobs:
       - name: Run chat template tests
         run: pytest tests/test_chat_template.py -v
 
+  offline-unit-tests:
+    name: Offline unit tests (builder, alias, instruct)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install -e ".[dev]"
+
+      - name: Run offline unit tests
+        run: >
+          pytest -v
+          tests/test_alias.py::TestAliasNormalizerChain
+          tests/test_builder.py::TestOmnimodalDerivation
+          tests/test_builder.py::TestShipped1p5
+          tests/test_instruct.py
+
   tokenizer-tests:
     name: Tokenizer load + round-trip tests
     runs-on: ubuntu-latest
