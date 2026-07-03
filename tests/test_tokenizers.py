@@ -46,6 +46,10 @@ EXPECTED = {
     },
 }
 
+# The double-BOS fix is applied to Apertus 1.5 only; the 1.0 tokenizer is
+# intentionally left unchanged, so the fix-behavior test runs on 1.5 alone.
+FIXED_TOKENIZERS = {"Apertus_1p5"}
+
 
 @pytest.mark.parametrize(
     "tok_dir", TOKENIZER_DIRS, ids=[p.name for p in TOKENIZER_DIRS]
@@ -89,3 +93,68 @@ def test_special_token_decode(tok_dir):
     tok = AutoTokenizer.from_pretrained(str(tok_dir))
     for token_id, expected in EXPECTED[tok_dir.name]["decode"].items():
         assert tok.decode([token_id]) == expected, token_id
+
+
+@pytest.mark.parametrize(
+    "tok_dir",
+    [p for p in TOKENIZER_DIRS if p.name in FIXED_TOKENIZERS],
+    ids=[p.name for p in TOKENIZER_DIRS if p.name in FIXED_TOKENIZERS],
+)
+def test_no_double_bos_on_completions_path(tok_dir):
+    """The post-processor must not auto-prepend BOS. The chat template already
+    emits it, so a chat-templated prompt posted to /completions (where
+    add_special_tokens defaults to True) would otherwise be double-BOSed and
+    degenerate (apertus-program #420).
+
+    Checks (a) add_special_tokens no longer adds a leading BOS, and (b) a
+    <s>-prefixed prompt encodes to exactly one leading BOS."""
+    tok = AutoTokenizer.from_pretrained(str(tok_dir))
+    bos_id = tok.bos_token_id
+    assert bos_id is not None
+    # (a) no auto-prepended BOS
+    with_special = tok.encode("Paris", add_special_tokens=True)
+    without_special = tok.encode("Paris", add_special_tokens=False)
+    assert with_special == without_special, (
+        f"add_special_tokens still prepends {with_special[:2]!r}"
+    )
+    # (b) a <s>-prefixed prompt -> single BOS, not two
+    ids = tok.encode(f"{tok.bos_token}The capital of France is Paris.",
+                     add_special_tokens=True)
+    assert ids[:2] != [bos_id, bos_id], f"double BOS: {ids[:3]}"
+    assert ids[0] == bos_id, f"expected one leading BOS, got {ids[:3]}"
+
+
+def test_strip_bos_from_post_processor_is_surgical_and_idempotent(tmp_path):
+    """strip_bos_from_post_processor removes only the BOS SpecialToken entries
+    from single/pair, keeps the Sequence entries, and is a no-op on a second
+    run."""
+    import json as _json
+    from omnitok.io import strip_bos_from_post_processor
+
+    tj = {
+        "post_processor": {
+            "type": "TemplateProcessing",
+            "single": [
+                {"SpecialToken": {"id": "<s>", "type_id": 0}},
+                {"Sequence": {"id": "A", "type_id": 0}},
+            ],
+            "pair": [
+                {"SpecialToken": {"id": "<s>", "type_id": 0}},
+                {"Sequence": {"id": "A", "type_id": 0}},
+                {"SpecialToken": {"id": "<s>", "type_id": 1}},
+                {"Sequence": {"id": "B", "type_id": 1}},
+            ],
+        }
+    }
+    (tmp_path / "tokenizer.json").write_text(_json.dumps(tj, indent=2))
+    (tmp_path / "tokenizer_config.json").write_text(_json.dumps({"bos_token": "<s>"}))
+
+    assert strip_bos_from_post_processor(str(tmp_path)) is True
+    pp = _json.loads((tmp_path / "tokenizer.json").read_text())["post_processor"]
+    assert pp["single"] == [{"Sequence": {"id": "A", "type_id": 0}}]
+    assert pp["pair"] == [
+        {"Sequence": {"id": "A", "type_id": 0}},
+        {"Sequence": {"id": "B", "type_id": 1}},
+    ]
+    # Idempotent: nothing left to strip.
+    assert strip_bos_from_post_processor(str(tmp_path)) is False

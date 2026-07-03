@@ -162,6 +162,102 @@ def add_token_alias(
     print(f"  Added alias {alias} -> {token}")
 
 
+def _match_brace_span(text: str, open_pos: int) -> int:
+    """Return the index just past the ``}`` matching the ``{`` at ``open_pos``.
+
+    Skips braces inside JSON strings (respecting ``\\`` escapes) so nested
+    objects and any brace-bearing string values are handled correctly.
+    """
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(open_pos, len(text)):
+        c = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+            continue
+        if c == '"':
+            in_str = True
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+    raise ValueError("unbalanced braces while matching post_processor")
+
+
+def strip_bos_from_post_processor(save_path: str) -> bool:
+    """Remove the BOS ``SpecialToken`` from ``tokenizer.json``'s post-processor.
+
+    Apertus' fast-tokenizer post-processor (a ``TemplateProcessing``) hardcodes
+    the BOS (``<s>``) in front of every sequence, so ``add_special_tokens=True``
+    prepends it. That is the default on the ``/completions`` path, and the chat
+    template ALSO emits ``{{ bos_token }}`` -- so a client that posts a
+    chat-templated prompt to ``/completions`` gets ``<s><s>...`` -> degeneration
+    (apertus-program #420). The chat path is unaffected: vLLM renders the template
+    and encodes with ``add_special_tokens=False``, so the post-processor never
+    runs there and the single BOS comes from the template.
+
+    Dropping the BOS ``SpecialToken`` from the post-processor's ``single``/``pair``
+    templates makes ``add_special_tokens=True`` stop prepending it: a
+    ``<s>``-prefixed ``/completions`` prompt then yields exactly one BOS, chat is
+    unchanged. Trade-off: a plain-text ``/completions`` prompt gets no BOS.
+
+    Rewrites only the post-processor object (bracket-matched), leaving every other
+    byte of the multi-MB file untouched. Returns True if a change was made.
+    """
+    cfg_path = os.path.join(save_path, "tokenizer_config.json")
+    bos = "<s>"
+    if os.path.exists(cfg_path):
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        tok = cfg.get("bos_token")
+        bos = tok.get("content") if isinstance(tok, dict) else (tok or bos)
+
+    path = os.path.join(save_path, "tokenizer.json")
+    with open(path, "r", encoding="utf-8") as f:
+        text = f.read()
+
+    key = '"post_processor":'
+    k = text.find(key)
+    if k == -1:
+        print("  No post_processor found")
+        return False
+    open_pos = text.index("{", k)
+    end = _match_brace_span(text, open_pos)
+    pp = json.loads(text[open_pos:end])
+
+    def _has_bos(item) -> bool:
+        st = item.get("SpecialToken") if isinstance(item, dict) else None
+        return bool(st and st.get("id") == bos)
+
+    removed = 0
+    for field in ("single", "pair"):
+        seq = pp.get(field)
+        if isinstance(seq, list):
+            kept = [it for it in seq if not _has_bos(it)]
+            removed += len(seq) - len(kept)
+            pp[field] = kept
+    if not removed:
+        print(f"  post_processor does not prepend {bos!r}; nothing to strip")
+        return False
+
+    # Re-indent the object to sit at the same nesting level (its lines are
+    # indented by 2 spaces; the key/opening brace stay on their original line).
+    new_pp = json.dumps(pp, ensure_ascii=False, indent=2).replace("\n", "\n  ")
+    text = text[:open_pos] + new_pp + text[end:]
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+    print(f"  Stripped {removed} BOS ({bos!r}) entrie(s) from post_processor")
+    return True
+
+
 # ── Tokenizer config ─────────────────────────────────────────────────────────
 
 
