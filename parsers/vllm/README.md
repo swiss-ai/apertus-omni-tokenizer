@@ -56,11 +56,22 @@ those ids decode to differs across tokenizer builds:
 `apertus_reasoning_parser.py` picks whichever candidate pair the loaded tokenizer
 exposes at the lower (emitted) id — working under either scheme with no edits.
 
-## Caveat (apertus-omni-tokenizer #5)
+## Reasoning delimiters are non-special (apertus-omni-tokenizer #5)
 
-The reasoning delimiters are registered as **special** tokens, so on the
-**non-streaming** path they are stripped from the detokenized string unless
-`skip_special_tokens=false` (the tool parser forces this when tools are active;
-clients can pass it otherwise). **Streaming is unaffected** (it keys on token
-ids). Registering the delimiters as *non-special* in the tokenizer builder would
-remove this caveat entirely.
+The reasoning delimiters are registered as **non-special** tokens, so they
+survive detokenization under the default `skip_special_tokens=true` and the
+**non-streaming** parser can always find the end-of-reasoning delimiter — no
+per-request override needed. **Streaming is unaffected** either way (it keys on
+token ids).
+
+Older builds shipped the delimiters as *special* tokens, which the default
+`skip_special_tokens=true` stripped before the non-streaming parser ran, leaking
+the whole deliberation block into `content`. If you hit that on a deployed model
+directory, flip the flag in place:
+
+```
+python examples/mark_reasoning_delimiters_nonspecial.py /path/to/served/model
+```
+
+The tokenizer builder now applies this automatically (`mark_tokens_non_special`),
+so freshly built tokenizers need no fix-up.

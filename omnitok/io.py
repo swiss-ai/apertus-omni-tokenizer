@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 from typing import Any
 
@@ -160,6 +161,117 @@ def add_token_alias(
     if save:
         tok.save_pretrained(save_path)
     print(f"  Added alias {alias} -> {token}")
+
+
+# Reasoning-delimiter tokens across both known tokenizer schemes. The canonical
+# repo build carries <|inner_prefix|>/<|inner_suffix|> at the emitted ids; some
+# deployed builds register <think>/</think> there instead. We flip whichever are
+# present, so this is safe to run on either scheme (apertus-omni-tokenizer #5).
+REASONING_DELIMITER_TOKENS = (
+    "<|inner_prefix|>",
+    "<|inner_suffix|>",
+    "<think>",
+    "</think>",
+)
+
+
+def mark_tokens_non_special(
+    save_path: str, tokens: tuple[str, ...] = REASONING_DELIMITER_TOKENS
+) -> list[str]:
+    """Flip ``special`` to ``false`` for ``tokens`` in the saved tokenizer files.
+
+    A vLLM reasoning parser locates the end-of-reasoning delimiter in the
+    *detokenized* string. When the delimiter is a **special** token, the default
+    ``skip_special_tokens=True`` strips it before the parser runs, so the whole
+    deliberation block leaks into ``content`` and the ``reasoning`` channel stays
+    empty (apertus-omni-tokenizer #5). Registering the delimiters as non-special
+    keeps them in the decoded output for every client -- no ``skip_special_tokens``
+    override required -- while their ids (hence the streaming parser and any
+    encoding of the literal string) are unchanged.
+
+    Edits ``tokenizer.json`` (``added_tokens``) and, when present,
+    ``tokenizer_config.json`` (``added_tokens_decoder``), and drops the tokens
+    from ``additional_special_tokens`` in ``special_tokens_map.json``. Only tokens
+    actually present are touched. Returns the list of tokens that were flipped.
+
+    Note: modifies files on disk, not any in-memory tokenizer object.
+    """
+    targets = set(tokens)
+    flipped: set[str] = set()
+    present: set[str] = set()  # delimiters found in the files, at any `special`
+
+    # tokenizer.json is up to tens of MB; a full json round-trip would reformat
+    # the whole file (and risk serializer drift). Flip the one boolean in place.
+    # An added-token entry is a *flat* JSON object (no nested braces) carrying
+    # BOTH a "content" string and a "special" bool -- e.g.
+    #   {"id": 32, "content": "<|inner_prefix|>", ..., "special": true}
+    # This shape appears in tokenizer.json's `added_tokens` list and in
+    # tokenizer_config.json's `added_tokens_decoder` map. Matching flat objects
+    # and requiring both fields is what keeps a normalizer `Replace` rule -- which
+    # also mentions the token in "content" but has a nested "pattern" object and
+    # no "special" -- from being mistaken for a patchable delimiter, and makes the
+    # flip independent of the order of the "content"/"special" keys.
+    flat_obj = re.compile(r"\{[^{}]*\}", re.DOTALL)
+
+    def _flip_in_text(path: str) -> None:
+        if not os.path.exists(path):
+            return
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read()
+        n_changed = 0
+
+        def _patch(match):
+            nonlocal n_changed
+            obj = match.group(0)
+            content = re.search(r'"content"\s*:\s*"([^"]*)"', obj)
+            if content is None or content.group(1) not in targets:
+                return obj
+            if re.search(r'"special"\s*:\s*(?:true|false)', obj) is None:
+                return obj  # not an added-token entry (e.g. a normalizer rule)
+            tok = content.group(1)
+            present.add(tok)  # present regardless of its `special` value
+            new_obj, n = re.subn(r'("special"\s*:\s*)true', r"\1false", obj)
+            if n:
+                flipped.add(tok)
+                n_changed += n
+            return new_obj
+
+        new_text = flat_obj.sub(_patch, text)
+        # Avoid a multi-MB no-op rewrite (and mtime churn) when nothing changed.
+        if n_changed:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(new_text)
+
+    _flip_in_text(os.path.join(save_path, "tokenizer.json"))
+    _flip_in_text(os.path.join(save_path, "tokenizer_config.json"))
+
+    stm_path = os.path.join(save_path, "special_tokens_map.json")
+    if os.path.exists(stm_path):
+        with open(stm_path, "r", encoding="utf-8") as f:
+            stm = json.load(f)
+        ast = stm.get("additional_special_tokens")
+        if isinstance(ast, list):
+            def _content(t):
+                return t.get("content") if isinstance(t, dict) else t
+
+            removed = {_content(t) for t in ast if _content(t) in targets}
+            present.update(removed)
+            if removed:
+                stm["additional_special_tokens"] = [
+                    t for t in ast if _content(t) not in targets
+                ]
+                flipped.update(removed)  # only tokens actually present/removed
+                with open(stm_path, "w", encoding="utf-8") as f:
+                    json.dump(stm, f, ensure_ascii=False, indent=2)
+
+    for tok in sorted(flipped):
+        print(f"  Marked {tok} non-special")
+    if not flipped:
+        if present:
+            print("  Reasoning delimiters already non-special; nothing to do")
+        else:
+            print("  No reasoning delimiters found to mark non-special")
+    return sorted(flipped)
 
 
 # ── Tokenizer config ─────────────────────────────────────────────────────────
