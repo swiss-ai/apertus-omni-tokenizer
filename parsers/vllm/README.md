@@ -25,6 +25,31 @@ Verified by resolving every imported symbol against the actual vLLM source at
 each tag; the `ToolParser` base `__init__(tokenizer, tools)` contract is stable
 across the supported range.
 
+### Why use this plugin instead of the parser built into vLLM v0.22+?
+
+On v0.22 – v0.24 the upstream `--tool-call-parser apertus` is the **same code**
+(byte-identical apart from this file's `@ToolParserManager.register_module`
+line, which upstream replaces with an entry in the lazy-import table in
+`vllm/tool_parsers/__init__.py`) — so for plain production serving on those
+versions, just use the built-in and skip the plugin. Reach for this copy when:
+
+- **You're on v0.19 – v0.21** — the module layout supports the plugin but the
+  Apertus parser hasn't been upstreamed yet. The plugin is the only option.
+- **You need to iterate on parser behavior** — this repo exists so you can
+  deploy the parser manually for dev: edit the file, restart the server, done.
+  No vLLM fork, rebuild, or upgrade required, and fixes can be validated here
+  before being sent upstream.
+- **You want the parser version pinned independently of the engine** — with the
+  built-in, parser behavior silently changes whenever you bump vLLM. Loading
+  this file via `--tool-parser-plugin` freezes the parsing logic across engine
+  upgrades (within the compatible layout range above).
+- **You need to hotfix a deployment** — a parser bug can be patched in place on
+  a running deployment without waiting for (or upgrading to) a vLLM release.
+
+Note: the plugin registers under the same name (`apertus`), and on v0.22+ the
+plugin's registration takes effect via `--tool-parser-plugin`, overriding the
+built-in — you don't need to rename anything to use it on those versions.
+
 Enable reasoning generation (Apertus's own chat-template switch) with
 `--default-chat-template-kwargs.enable_thinking true`.
 
