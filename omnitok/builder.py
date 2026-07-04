@@ -137,7 +137,30 @@ def add_modality(
     stats["final_vocab_size"] = len(tokenizer)
     print(f"New vocab size: {stats['final_vocab_size']:,}")
 
-    # Save
+    renames = {
+        f"<|RESERVED_OMNI_{r.reserved_index:03d}|>": r.target_name
+        for r in mc.structure_tokens
+    }
+    tokenizer = _assemble(
+        output_path, tokenizer, mc, vocab_size, base_vocab_size,
+        renames, extra_config,
+    )
+    return tokenizer, stats
+
+
+# ── Private helpers ──────────────────────────────────────────────────────────
+
+
+def _assemble(
+    output_path: str,
+    tokenizer,
+    mc: ModalityConfig,
+    vocab_size: int,
+    base_vocab_size: int,
+    renames: dict[str, str],
+    extra_config: dict[str, Any] | None,
+) -> Any:
+    """Save, rename, alias, and write omnimodal metadata; returns the reloaded tokenizer."""
     save_tokenizer(
         tokenizer,
         output_path,
@@ -147,11 +170,7 @@ def add_modality(
     )
 
     # Rename structure tokens
-    print(f"\nRenaming RESERVED_OMNI tokens to {mc.name} structure tokens...")
-    renames = {
-        f"<|RESERVED_OMNI_{r.reserved_index:03d}|>": r.target_name
-        for r in mc.structure_tokens
-    }
+    print(f"\nRenaming reserved tokens to {mc.name} structure tokens...")
     rename_reserved_tokens(output_path, tokenizer, renames)
 
     # Reload so returned tokenizer has renames applied.
@@ -192,10 +211,7 @@ def add_modality(
     # Verification
     _print_verification(tokenizer, mc, vocab_size)
 
-    return tokenizer, stats
-
-
-# ── Private helpers ──────────────────────────────────────────────────────────
+    return tokenizer
 
 
 def _resolve_modality(modality: str | ModalityConfig) -> ModalityConfig:
