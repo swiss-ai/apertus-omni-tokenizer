@@ -6,9 +6,10 @@ with one modality-agnostic function.
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
-from tokenizers import AddedToken
+from tokenizers import AddedToken, Tokenizer
 from transformers import AutoTokenizer
 
 from .io import (
@@ -148,7 +149,119 @@ def add_modality(
     return tokenizer, stats
 
 
+def add_modality_in_place(
+    input_tokenizer_path: str,
+    output_path: str,
+    modality: str | ModalityConfig,
+    vocab_size: int,
+    *,
+    renames: dict[str, str],
+    reused_ids: dict[str, int],
+    expected_base_vocab_size: int | None = None,
+) -> tuple[Any, dict[str, Any]]:
+    """Add a modality by renaming the base's pre-baked reserve slots.
+
+    For bases that ship their own special-token pool (Apertus 2): the pool
+    slots in ``renames`` are renamed in place, the placeholders in
+    ``reused_ids`` (name -> pinned id) are reused as-is, and only content
+    tokens are appended. Raises if the base does not match the recipe.
+
+    One-shot per modality: rebuild from the base rather than re-running
+    over an output.
+
+    Returns:
+        (tokenizer, stats) tuple.
+    """
+    mc = _resolve_modality(modality)
+    if vocab_size <= 0:
+        raise ValueError(f"vocab_size must be positive, got {vocab_size}")
+
+    print("=" * 60)
+    print(f"ADDING MODALITY IN PLACE: {mc.name}")
+    print("=" * 60)
+
+    existing = detect_existing_modalities(input_tokenizer_path)
+    tokenizer = AutoTokenizer.from_pretrained(input_tokenizer_path, use_fast=True)
+    base_vocab_size = existing["base_vocab_size"] or len(tokenizer)
+    if expected_base_vocab_size and base_vocab_size != expected_base_vocab_size:
+        raise ValueError(
+            f"base vocab is {base_vocab_size:,}, "
+            f"expected {expected_base_vocab_size:,}"
+        )
+    print(f"\nInput tokenizer: {input_tokenizer_path}")
+    print(f"Base vocab size (text-only): {base_vocab_size:,}")
+
+    _strip_post_processor(tokenizer)
+    _assert_in_place_base(tokenizer, renames, reused_ids)
+
+    stats = {
+        "input_tokenizer": input_tokenizer_path,
+        "modality": mc.name,
+        "base_vocab_size": base_vocab_size,
+        "original_vocab_size": len(tokenizer),
+        "reserved_tokens_added": 0,
+        "content_tokens_added": 0,
+        "final_vocab_size": 0,
+        "existing_modalities": list(existing["modalities"].keys()),
+    }
+
+    content = _collect_content_tokens(tokenizer.get_vocab(), vocab_size, mc)
+    stats["content_tokens_added"] = len(content)
+    print(f"\nAdding {len(content):,} content tokens...")
+    tokenizer.add_tokens(content, special_tokens=True)
+
+    stats["final_vocab_size"] = len(tokenizer)
+    print(f"New vocab size: {stats['final_vocab_size']:,}")
+
+    tokenizer = _assemble(
+        output_path, tokenizer, mc, vocab_size, base_vocab_size,
+        renames, extra_config=None,
+    )
+    return tokenizer, stats
+
+
 # ── Private helpers ──────────────────────────────────────────────────────────
+
+
+def _strip_post_processor(tokenizer) -> None:
+    """Drop the base's BOS/EOS-injecting post-processor.
+
+    BOS is template-owned and nothing may auto-append EOS to prompts
+    (apertus-program#420); SFT packing needs exact encoding.
+    Refuses post-processor shapes it does not recognize.
+    """
+    state = json.loads(tokenizer.backend_tokenizer.to_str())
+    pp = state.get("post_processor")
+    if pp is None:
+        return
+    if pp.get("type") != "TemplateProcessing" or not (
+        set(pp.get("special_tokens", {})) <= {"<s>", "</s>"}
+    ):
+        raise ValueError(f"unrecognized base post-processor: {pp.get('type')}")
+    state["post_processor"] = None
+    tokenizer._tokenizer = Tokenizer.from_str(json.dumps(state))
+    print("Stripped base BOS/EOS post-processor (specials are template-owned)")
+
+
+def _assert_in_place_base(
+    tokenizer,
+    renames: dict[str, str],
+    reused_ids: dict[str, int],
+) -> None:
+    """The base must carry the recipe's pool slots and placeholders."""
+    vocab = tokenizer.get_vocab()
+    added = {t.content for t in tokenizer.added_tokens_decoder.values()}
+    missing = [s for s in renames if s not in added]
+    if missing:
+        raise ValueError(f"base is missing reserve slots: {missing}")
+    taken = [t for t in renames.values() if t in vocab]
+    if taken:
+        raise ValueError(f"rename targets already exist in the base: {taken}")
+    for name, expected in reused_ids.items():
+        if name not in added:
+            raise ValueError(f"reused token {name} is not an added token")
+        if vocab[name] != expected:
+            raise ValueError(f"{name} has id {vocab[name]}, expected {expected}")
 
 
 def _assemble(

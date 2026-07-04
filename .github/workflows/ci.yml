@@ -50,6 +50,7 @@ jobs:
           tests/test_builder.py::TestOmnimodalDerivation
           tests/test_builder.py::TestShipped1p5
           tests/test_builder.py::TestAddModalityOffline
+          tests/test_builder.py::TestInPlaceOffline
           tests/test_instruct.py
 
   tokenizer-tests:
