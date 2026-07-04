@@ -323,3 +323,41 @@ class TestShipped1p5:
         assert get_content_token_id(0, mapping=vision) == 131272
         assert get_content_token_id(131071, mapping=vision) == 131272 + 131071
         assert get_content_token_id(4095, mapping=audio) == 262344 + 4095
+
+
+# ── Offline end-to-end build ─────────────────────────────────────────────────
+
+
+class TestAddModalityOffline:
+    def test_full_build_on_synthetic_base(self, tmp_path):
+        base = str(tmp_path / "base")
+        make_word_level_tokenizer(("<unk>", "hi")).save_pretrained(base)
+        out = str(tmp_path / "vision")
+        tok, stats = add_modality(base, out, "vision", 4)
+
+        entry = _omnimodal_entry(out, "vision")
+        assert entry["vocab_size"] == 4
+        assert entry["offset"] == tok.convert_tokens_to_ids("<|visual token 0|>")
+        for name, tid in entry["structure_token_ids"].items():
+            assert tok.convert_tokens_to_ids(name) == tid
+        assert "<|img_start|>" in entry["structure_token_ids"]
+
+        vocab = tok.get_vocab()
+        for r in VISION.structure_tokens:
+            assert f"<|RESERVED_OMNI_{r.reserved_index:03d}|>" not in vocab
+        img = tok.convert_tokens_to_ids("<|image|>")
+        assert tok.encode("<image>", add_special_tokens=False) == [img]
+        assert not os.path.exists(os.path.join(out, "vision_token_mapping.json"))
+
+    def test_stacking_on_synthetic_base(self, tmp_path):
+        base = str(tmp_path / "base")
+        make_word_level_tokenizer(("<unk>", "hi")).save_pretrained(base)
+        vis = str(tmp_path / "vis")
+        va = str(tmp_path / "va")
+        add_modality(base, vis, "vision", 4)
+        tok, _ = add_modality(vis, va, "audio", 2)
+
+        vision = _omnimodal_entry(va, "vision")
+        audio = _omnimodal_entry(va, "audio")
+        assert audio["offset"] == vision["offset"] + 4
+        assert audio["structure_token_ids"]["<|audio_start|>"] == tok.convert_tokens_to_ids("<|audio_start|>")
