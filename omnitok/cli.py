@@ -24,6 +24,12 @@ def cmd_add_modality(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_build_apertus_2(args: argparse.Namespace) -> None:
+    from .versions import apertus_2
+
+    apertus_2.build(args.input_tokenizer, args.output_path)
+
+
 def cmd_add_instruct(args: argparse.Namespace) -> None:
     from .instruct import create_instruct_tokenizer
 
@@ -71,6 +77,21 @@ def main() -> None:
         help='JSON string for modality metadata, e.g. \'{"type": "Emu3.5"}\'.',
     )
     p_add.set_defaults(func=cmd_add_modality)
+
+    # ── build-apertus-2 ───────────────────────────────────────────────────
+    p_v2 = sub.add_parser(
+        "build-apertus-2",
+        help="Build the Apertus 2 omni tokenizer from the pinned text base.",
+    )
+    p_v2.add_argument(
+        "--input-tokenizer", required=True,
+        help="Path to the preliminary_mul_200k text base.",
+    )
+    p_v2.add_argument(
+        "--output-path", required=True,
+        help="Where to save the result.",
+    )
+    p_v2.set_defaults(func=cmd_build_apertus_2)
 
     # ── add-instruct ──────────────────────────────────────────────────────
     p_inst = sub.add_parser(
