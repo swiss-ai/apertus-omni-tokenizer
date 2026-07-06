@@ -39,7 +39,7 @@ from typing import Any
 
 from huggingface_hub import snapshot_download
 from huggingface_hub.utils import HFValidationError, RepositoryNotFoundError
-from tokenizers import normalizers
+from tokenizers import Tokenizer
 from transformers import AutoTokenizer
 
 from .modalities import MODALITY_REGISTRY, ModalityConfig
@@ -132,10 +132,13 @@ def add_token_alias(
 ) -> None:
     """Make ``alias`` encode to the same token ID as ``token``.
 
-    Prepends a normalizers.Replace(alias, token) to the tokenizer's
-    normalizer chain. The target token must have been created with
-    AddedToken(normalized=True) so the matcher checks normalized input
-    (where the alias has already been rewritten).
+    Prepends a Replace(alias, token) rule to the tokenizer's normalizer chain,
+    and switches the target token to normalized=True in the same rebuild:
+    the rewritten alias only exists after normalization, so the target must match normalized input.
+    Raises ValueError if ``token`` is not an added token.
+
+    The normalizer is rebuilt as a single flat Sequence from the tokenizer's serialized state;
+    nested Sequences lose their child rules on some tokenizers versions.
 
     This eliminates the need for manual .replace("<image>", "<|image|>")
     calls in data loaders and conversation transforms.
@@ -149,13 +152,30 @@ def add_token_alias(
         add_token_alias(path, "<|image|>", "<image>")
         # Now tokenizer.encode("<image>") == tokenizer.encode("<|image|>")
     """
+    if tokenizer is None and not save:
+        raise ValueError("save=False without tokenizer= would discard the alias")
     tok = tokenizer if tokenizer is not None else AutoTokenizer.from_pretrained(save_path)
-    backend = tok.backend_tokenizer
-    replace = normalizers.Replace(alias, token)
-    existing = backend.normalizer
-    backend.normalizer = (
-        normalizers.Sequence([replace, existing]) if existing else replace
-    )
+    state = json.loads(tok.backend_tokenizer.to_str())
+
+    target = next((t for t in state.get("added_tokens", []) if t["content"] == token), None)
+    if target is None:
+        raise ValueError(f"Alias target {token!r} is not an added token")
+    target["normalized"] = True
+
+    existing = state.get("normalizer")
+    if existing is None:
+        chain = []
+    elif existing["type"] == "Sequence":
+        chain = existing["normalizers"]
+    else:
+        chain = [existing]
+    rule = {"type": "Replace", "pattern": {"String": alias}, "content": token}
+    if rule not in chain:
+        chain.insert(0, rule)
+    state["normalizer"] = {"type": "Sequence", "normalizers": chain}
+
+    # transformers exposes no setter for backend_tokenizer
+    tok._tokenizer = Tokenizer.from_str(json.dumps(state))
     if save:
         tok.save_pretrained(save_path)
     print(f"  Added alias {alias} -> {token}")
