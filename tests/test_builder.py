@@ -6,14 +6,31 @@ import os
 import pytest
 from transformers import AutoTokenizer
 
-from omnitok import add_modality
+from tokenizers import Tokenizer, models
+from transformers import PreTrainedTokenizerFast
+
+from omnitok import (
+    add_modality,
+    detect_existing_modalities,
+    get_content_token_id,
+    load_modality_mapping,
+)
+from omnitok.io import build_omnimodal_config
 from omnitok.modalities import MODALITY_REGISTRY, VISION, AUDIO
 
 BASE_TOKENIZER = "swiss-ai/Apertus-8B-2509"
 SMALL_VOCAB = 32
 
 
-# ── Vocab size & mapping file ───────────────────────────────────────────────
+def _omnimodal_entry(tokenizer_dir, name):
+    with open(os.path.join(tokenizer_dir, "tokenizer_config.json")) as f:
+        config = json.load(f)
+    return next(
+        m for m in config["omnimodal_config"]["modalities"] if m["name"] == name
+    )
+
+
+# ── Vocab size & omnimodal metadata ──────────────────────────────────────────
 
 
 class TestVisionOnly:
@@ -22,16 +39,23 @@ class TestVisionOnly:
         base = tok.vocab_size  # text-only base
         assert len(tok) == base + 200 + SMALL_VOCAB
 
-    def test_mapping_file_exists(self, vision_tokenizer):
-        assert os.path.exists(
+    def test_no_mapping_file_emitted(self, vision_tokenizer):
+        assert not os.path.exists(
             os.path.join(vision_tokenizer, "vision_token_mapping.json")
         )
 
-    def test_mapping_has_all_entries(self, vision_tokenizer):
-        with open(os.path.join(vision_tokenizer, "vision_token_mapping.json")) as f:
-            data = json.load(f)
-        assert data["visual_vocab_size"] == SMALL_VOCAB
-        assert len(data["vision_token_ids"]) == SMALL_VOCAB
+    def test_omnimodal_entry(self, vision_tokenizer):
+        entry = _omnimodal_entry(vision_tokenizer, "vision")
+        assert entry["vocab_size"] == SMALL_VOCAB
+
+    def test_content_token_id_lookup(self, vision_tokenizer):
+        tok = AutoTokenizer.from_pretrained(vision_tokenizer)
+        mapping = load_modality_mapping(vision_tokenizer, "vision")
+        for i in (0, SMALL_VOCAB - 1):
+            expected = tok.convert_tokens_to_ids(f"<|visual token {i}|>")
+            assert get_content_token_id(i, mapping=mapping) == expected
+        with pytest.raises(ValueError, match="not found"):
+            get_content_token_id(SMALL_VOCAB, mapping=mapping)
 
     def test_structure_tokens_resolve(self, vision_tokenizer):
         tok = AutoTokenizer.from_pretrained(vision_tokenizer)
@@ -46,10 +70,13 @@ class TestVisionOnly:
         assert config["base_vocab_size"] > 0
 
     def test_content_tokens_contiguous(self, vision_tokenizer):
-        with open(os.path.join(vision_tokenizer, "vision_token_mapping.json")) as f:
-            data = json.load(f)
-        ids = [data["vision_token_ids"][str(i)] for i in range(SMALL_VOCAB)]
-        assert ids == list(range(ids[0], ids[0] + SMALL_VOCAB))
+        tok = AutoTokenizer.from_pretrained(vision_tokenizer)
+        offset = _omnimodal_entry(vision_tokenizer, "vision")["offset"]
+        ids = [
+            tok.convert_tokens_to_ids(f"<|visual token {i}|>")
+            for i in range(SMALL_VOCAB)
+        ]
+        assert ids == list(range(offset, offset + SMALL_VOCAB))
 
 
 class TestAudioOnly:
@@ -58,8 +85,8 @@ class TestAudioOnly:
         base = tok.vocab_size
         assert len(tok) == base + 200 + SMALL_VOCAB
 
-    def test_mapping_file_exists(self, audio_tokenizer):
-        assert os.path.exists(
+    def test_no_mapping_file_emitted(self, audio_tokenizer):
+        assert not os.path.exists(
             os.path.join(audio_tokenizer, "audio_token_mapping.json")
         )
 
@@ -74,29 +101,25 @@ class TestAudioOnly:
 
 
 class TestStacking:
-    def test_both_mapping_files_exist(self, stacked_tokenizer):
-        assert os.path.exists(
+    def test_no_mapping_files_emitted(self, stacked_tokenizer):
+        assert not os.path.exists(
             os.path.join(stacked_tokenizer, "vision_token_mapping.json")
         )
-        assert os.path.exists(
+        assert not os.path.exists(
             os.path.join(stacked_tokenizer, "audio_token_mapping.json")
         )
 
     def test_vision_ids_preserved(self, vision_tokenizer, stacked_tokenizer):
-        with open(os.path.join(vision_tokenizer, "vision_token_mapping.json")) as f:
-            vision_only = json.load(f)
-        with open(os.path.join(stacked_tokenizer, "vision_token_mapping.json")) as f:
-            stacked = json.load(f)
-        for key in vision_only["vision_token_ids"]:
-            assert vision_only["vision_token_ids"][key] == stacked["vision_token_ids"][key]
+        vision_only = _omnimodal_entry(vision_tokenizer, "vision")
+        stacked = _omnimodal_entry(stacked_tokenizer, "vision")
+        assert vision_only["offset"] == stacked["offset"]
+        assert vision_only["vocab_size"] == stacked["vocab_size"]
 
     def test_audio_after_vision(self, stacked_tokenizer):
-        with open(os.path.join(stacked_tokenizer, "vision_token_mapping.json")) as f:
-            vision = json.load(f)
-        with open(os.path.join(stacked_tokenizer, "audio_token_mapping.json")) as f:
-            audio = json.load(f)
-        vision_last = vision["vision_token_offset"] + vision["visual_vocab_size"] - 1
-        assert audio["audio_token_offset"] > vision_last
+        vision = _omnimodal_entry(stacked_tokenizer, "vision")
+        audio = _omnimodal_entry(stacked_tokenizer, "audio")
+        vision_last = vision["offset"] + vision["vocab_size"] - 1
+        assert audio["offset"] > vision_last
 
     def test_omnimodal_config(self, stacked_tokenizer):
         with open(os.path.join(stacked_tokenizer, "tokenizer_config.json")) as f:
@@ -234,6 +257,75 @@ class TestExtraConfig:
             config = json.load(f)
         assert "vision_tokenizer" in config
         assert config["vision_tokenizer"]["type"] == "Emu3.5"
+
+
+# ── Omnimodal derivation (synthetic, no network) ─────────────────────────────
+
+
+class TestOmnimodalDerivation:
+    @staticmethod
+    def _synthetic(tokens):
+        backend = Tokenizer(models.WordLevel({"<unk>": 0}, unk_token="<unk>"))
+        tok = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="<unk>")
+        tok.add_tokens(tokens)
+        return tok
+
+    def test_derives_offset_and_vocab_size(self):
+        tok = self._synthetic(
+            ["<|img_start|>", "<|img_end|>"]
+            + [f"<|visual token {i}|>" for i in range(3)]
+        )
+        omc = build_omnimodal_config(1, tok, registry={"vision": VISION})
+        (entry,) = omc["modalities"]
+        assert entry["vocab_size"] == 3
+        assert entry["offset"] == tok.convert_tokens_to_ids("<|visual token 0|>")
+
+    def test_rejects_gapped_content_ids(self):
+        tok = self._synthetic(
+            ["<|img_start|>", "<|img_end|>", "<|visual token 0|>", "<gap>"]
+            + [f"<|visual token {i}|>" for i in range(1, 3)]
+        )
+        with pytest.raises(ValueError, match="not contiguous"):
+            build_omnimodal_config(1, tok, registry={"vision": VISION})
+
+    def test_rejects_deleted_mid_range_tokens(self):
+        tok = self._synthetic(
+            ["<|img_start|>", "<|img_end|>", "<|visual token 0|>", "<|visual token 1|>"]
+            + ["<|visual token 4|>"]
+        )
+        with pytest.raises(ValueError, match="contiguous"):
+            build_omnimodal_config(1, tok, registry={"vision": VISION})
+
+    def test_absent_modality_yields_empty_config(self):
+        tok = self._synthetic(["<|img_start|>"])
+        assert build_omnimodal_config(1, tok, registry={"vision": VISION}) == {}
+
+    def test_zero_vocab_size_rejected(self, tmp_path):
+        base = str(tmp_path / "base")
+        self._synthetic([]).save_pretrained(base)
+        with pytest.raises(ValueError, match="must be positive"):
+            add_modality(base, str(tmp_path / "out"), "vision", 0)
+
+
+# ── Shipped artifact compatibility ───────────────────────────────────────────
+
+
+SHIPPED_1P5 = os.path.join(os.path.dirname(__file__), "..", "tokenizers", "Apertus_1p5")
+
+
+class TestShipped1p5:
+    """The config-based readers work against the artifact built by the old code."""
+
+    def test_detect(self):
+        det = detect_existing_modalities(SHIPPED_1P5)
+        assert det["base_vocab_size"] == 131072
+        assert det["modalities"]["vision"]["vocab_size"] == 131072
+        assert det["modalities"]["audio"]["vocab_size"] == 4096
+
+    def test_content_token_id(self):
+        assert get_content_token_id(0, SHIPPED_1P5, "vision") == 131272
+        assert get_content_token_id(131071, SHIPPED_1P5, "vision") == 131272 + 131071
+        assert get_content_token_id(4095, SHIPPED_1P5, "audio") == 262344 + 4095
 
 
 def test_is_apertus_1p5_gate():

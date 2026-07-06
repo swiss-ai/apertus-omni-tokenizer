@@ -6,8 +6,6 @@ with one modality-agnostic function.
 
 from __future__ import annotations
 
-import json
-import os
 from typing import Any
 
 from tokenizers import AddedToken
@@ -16,7 +14,6 @@ from transformers import AutoTokenizer
 from .io import (
     add_token_alias,
     build_omnimodal_config,
-    copy_modality_mapping_files,
     detect_existing_modalities,
     mark_tokens_non_special,
     rename_reserved_token,
@@ -54,6 +51,8 @@ def add_modality(
     """
     # Resolve modality config
     mc = _resolve_modality(modality)
+    if vocab_size <= 0:
+        raise ValueError(f"vocab_size must be positive, got {vocab_size}")
 
     print("=" * 60)
     print(f"ADDING MODALITY: {mc.name}")
@@ -97,10 +96,7 @@ def add_modality(
             )
         print(f"\n{mc.name} tokens already exist. Skipping.")
         tokenizer.save_pretrained(output_path)
-        copy_modality_mapping_files(existing, input_tokenizer_path, output_path)
-        omnimodal_config = build_omnimodal_config(
-            output_path, base_vocab_size, tokenizer
-        )
+        omnimodal_config = build_omnimodal_config(base_vocab_size, tokenizer)
         write_tokenizer_config(
             output_path,
             tokenizer,
@@ -153,9 +149,6 @@ def add_modality(
         config_section_name=mc.config_section_name,
     )
 
-    # Copy existing modality mapping files
-    copy_modality_mapping_files(existing, input_tokenizer_path, output_path)
-
     # Rename structure tokens
     print(f"\nRenaming RESERVED_OMNI tokens to {mc.name} structure tokens...")
     for rename in mc.structure_tokens:
@@ -173,9 +166,18 @@ def add_modality(
     if aliases:
         tokenizer.save_pretrained(output_path)
 
-    # Mapping must be written before omnimodal_config is rebuilt from disk.
-    _save_modality_mapping(output_path, mc, tokenizer, vocab_size, stats)
-    omnimodal_config = build_omnimodal_config(output_path, base_vocab_size, tokenizer)
+    # build_omnimodal_config verifies content-id contiguity for every modality.
+    omnimodal_config = build_omnimodal_config(base_vocab_size, tokenizer)
+    built = next(
+        (m for m in omnimodal_config.get("modalities", []) if m["name"] == mc.name),
+        None,
+    )
+    built_size = built["vocab_size"] if built else 0
+    if built_size != vocab_size:
+        raise ValueError(
+            f"{mc.name} ended up with {built_size} content tokens, "
+            f"expected {vocab_size}"
+        )
     write_tokenizer_config(
         output_path,
         tokenizer,
@@ -267,39 +269,6 @@ def _collect_content_tokens(
         if token not in existing_vocab:
             tokens.append(token)
     return tokens
-
-
-def _save_modality_mapping(
-    output_path: str,
-    mc: ModalityConfig,
-    tokenizer,
-    vocab_size: int,
-    stats: dict[str, Any],
-) -> None:
-    """Save the modality's token mapping JSON."""
-    mapping = {}
-    for i in range(vocab_size):
-        token = mc.content_token_format.format(i=i)
-        mapping[i] = tokenizer.convert_tokens_to_ids(token)
-
-    structure_tokens = {}
-    for rename in mc.structure_tokens:
-        key = rename.target_name.removeprefix("<|").removesuffix("|>")
-        structure_tokens[key] = tokenizer.convert_tokens_to_ids(rename.target_name)
-
-    data = {
-        mc.vocab_size_key: vocab_size,
-        f"{mc.name}_token_format": mc.content_token_format.replace("{i}", "N"),
-        mc.offset_key: mapping[0],
-        "vocab_size": stats["final_vocab_size"],
-        "structure_tokens": structure_tokens,
-        f"{mc.name}_token_ids": mapping,
-    }
-
-    mapping_path = os.path.join(output_path, mc.mapping_file)
-    with open(mapping_path, "w") as f:
-        json.dump(data, f, indent=2)
-    print(f"Saved {mc.mapping_file}")
 
 
 def _print_verification(

@@ -23,9 +23,6 @@ class ModalityConfig:
 
     name: str
     content_token_format: str  # Python format string with {i}
-    mapping_file: str
-    offset_key: str
-    vocab_size_key: str
     start_token: str
     end_token: str
     structure_tokens: tuple[TokenRename, ...]
@@ -43,9 +40,6 @@ class ModalityConfig:
 VISION = ModalityConfig(
     name="vision",
     content_token_format="<|visual token {i}|>",
-    mapping_file="vision_token_mapping.json",
-    offset_key="vision_token_offset",
-    vocab_size_key="visual_vocab_size",
     start_token="<|img_start|>",
     end_token="<|img_end|>",
     config_section_name="vision_tokenizer",
@@ -63,9 +57,6 @@ VISION = ModalityConfig(
 AUDIO = ModalityConfig(
     name="audio",
     content_token_format="<|audio token {i}|>",
-    mapping_file="audio_token_mapping.json",
-    offset_key="audio_token_offset",
-    vocab_size_key="audio_vocab_size",
     start_token="<|audio_start|>",
     end_token="<|audio_end|>",
     config_section_name="audio_tokenizer",
