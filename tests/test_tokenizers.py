@@ -10,10 +10,13 @@ Note the documented asymmetry in Apertus_1p5: <think>/</think> and
 back to the <|inner_*|> form. Apertus_1 has no such collision. See PR #7.
 """
 
+import json
 from pathlib import Path
 
 import pytest
 from transformers import AutoTokenizer
+
+from omnitok.io import mark_tokens_non_special
 
 TOKENIZERS_DIR = Path(__file__).resolve().parent.parent / "tokenizers"
 
@@ -45,6 +48,10 @@ EXPECTED = {
         "decode": {32: "<|inner_prefix|>", 33: "<|inner_suffix|>"},
     },
 }
+
+# The reasoning-delimiter fix is applied to Apertus 1.5 only; the 1.0 tokenizer
+# is intentionally left unchanged, so the fix-behavior test runs on 1.5 alone.
+FIXED_TOKENIZERS = {"Apertus_1p5"}
 
 
 @pytest.mark.parametrize(
@@ -89,3 +96,132 @@ def test_special_token_decode(tok_dir):
     tok = AutoTokenizer.from_pretrained(str(tok_dir))
     for token_id, expected in EXPECTED[tok_dir.name]["decode"].items():
         assert tok.decode([token_id]) == expected, token_id
+
+
+@pytest.mark.parametrize(
+    "tok_dir",
+    [p for p in TOKENIZER_DIRS if p.name in FIXED_TOKENIZERS],
+    ids=[p.name for p in TOKENIZER_DIRS if p.name in FIXED_TOKENIZERS],
+)
+def test_reasoning_delimiters_survive_skip_special(tok_dir):
+    """The reasoning delimiters (ids 32/33) are non-special, so they survive
+    decode under skip_special_tokens=True. If they were special, the default
+    detokenization would strip them and a vLLM reasoning parser could not find
+    the end-of-reasoning delimiter -- the whole deliberation block would leak
+    into `content` (apertus-omni-tokenizer #5)."""
+    tok = AutoTokenizer.from_pretrained(str(tok_dir))
+    for token_id, expected in EXPECTED[tok_dir.name]["decode"].items():
+        assert tok.decode([token_id], skip_special_tokens=True) == expected, token_id
+
+
+def test_mark_tokens_non_special_flips_and_is_idempotent(tmp_path):
+    """mark_tokens_non_special flips only the reasoning delimiters' `special`
+    flag across tokenizer.json + tokenizer_config.json, leaves other tokens and
+    all formatting intact, and is a no-op on a second run."""
+    tj = {
+        "added_tokens": [
+            {"id": 32, "content": "<|inner_prefix|>", "special": True},
+            {"id": 33, "content": "<|inner_suffix|>", "special": True},
+            {"id": 1, "content": "<eos>", "special": True},  # unrelated: untouched
+        ]
+    }
+    tc = {
+        "added_tokens_decoder": {
+            "32": {"content": "<|inner_prefix|>", "special": True},
+            "33": {"content": "<|inner_suffix|>", "special": True},
+        }
+    }
+    (tmp_path / "tokenizer.json").write_text(json.dumps(tj, indent=2))
+    (tmp_path / "tokenizer_config.json").write_text(json.dumps(tc, indent=2))
+
+    flipped = mark_tokens_non_special(str(tmp_path))
+    assert flipped == ["<|inner_prefix|>", "<|inner_suffix|>"]
+
+    out_tj = json.loads((tmp_path / "tokenizer.json").read_text())
+    by_id = {e["id"]: e["special"] for e in out_tj["added_tokens"]}
+    assert by_id[32] is False and by_id[33] is False
+    assert by_id[1] is True  # unrelated special token left alone
+    out_tc = json.loads((tmp_path / "tokenizer_config.json").read_text())
+    assert out_tc["added_tokens_decoder"]["32"]["special"] is False
+    assert out_tc["added_tokens_decoder"]["33"]["special"] is False
+
+    # Idempotent: nothing left to flip on a second run.
+    assert mark_tokens_non_special(str(tmp_path)) == []
+
+
+def test_mark_tokens_non_special_updates_special_tokens_map(tmp_path):
+    """The special_tokens_map.json branch drops reasoning delimiters from
+    additional_special_tokens, leaves unrelated tokens, and reports ONLY the
+    tokens actually removed -- not every candidate that happens to be absent."""
+    # Only <|inner_prefix|> is present; the other three candidates are absent.
+    (tmp_path / "tokenizer.json").write_text(json.dumps({"added_tokens": []}))
+    (tmp_path / "special_tokens_map.json").write_text(json.dumps({
+        "additional_special_tokens": ["<|inner_prefix|>", "<|keep_me|>"]
+    }))
+
+    flipped = mark_tokens_non_special(str(tmp_path))
+
+    # Reports the one present delimiter, NOT <|inner_suffix|>/<think>/</think>.
+    assert flipped == ["<|inner_prefix|>"]
+    stm = json.loads((tmp_path / "special_tokens_map.json").read_text())
+    assert stm["additional_special_tokens"] == ["<|keep_me|>"]
+    # Idempotent: nothing left to remove.
+    assert mark_tokens_non_special(str(tmp_path)) == []
+
+
+def test_mark_tokens_non_special_log_distinguishes_absent_from_already_fixed(
+    tmp_path, capsys
+):
+    """The no-op log must distinguish 'delimiters present but already
+    non-special' from 'delimiters not found' -- otherwise re-running on an
+    already-fixed dir misleadingly reports them as absent."""
+    # Present but already non-special -> "already non-special", not "not found".
+    (tmp_path / "tokenizer.json").write_text(json.dumps({
+        "added_tokens": [{"id": 32, "content": "<|inner_prefix|>", "special": False}]
+    }))
+    assert mark_tokens_non_special(str(tmp_path)) == []
+    out = capsys.readouterr().out
+    assert "already non-special" in out
+    assert "No reasoning delimiters found" not in out
+
+    # Genuinely absent -> "not found".
+    (tmp_path / "tokenizer.json").write_text(json.dumps({"added_tokens": []}))
+    assert mark_tokens_non_special(str(tmp_path)) == []
+    assert "No reasoning delimiters found" in capsys.readouterr().out
+
+
+def test_mark_tokens_non_special_ignores_non_added_token_refs_and_key_order(
+    tmp_path, capsys
+):
+    """Presence/flip key on flat objects carrying BOTH content and special. A
+    normalizer Replace rule that only mentions the token (nested pattern, no
+    special) -- as the real Apertus 1.5 tokenizer.json has for <|inner_prefix|>
+    -- must not be treated as a delimiter, and a reversed content/special key
+    order must still flip."""
+    tj = {
+        # Replace rule: references the token in "content" but is NOT an
+        # added-token entry (nested "pattern" object, no "special").
+        "normalizer": {
+            "type": "Sequence",
+            "normalizers": [
+                {"type": "Replace",
+                 "pattern": {"String": "<think>"},
+                 "content": "<|inner_prefix|>"},
+            ],
+        },
+        # Reversed key order: "special" before "content".
+        "added_tokens": [
+            {"id": 33, "special": True, "content": "<|inner_suffix|>"},
+        ],
+    }
+    (tmp_path / "tokenizer.json").write_text(json.dumps(tj, indent=2))
+
+    flipped = mark_tokens_non_special(str(tmp_path))
+
+    # inner_suffix flips despite reversed key order; inner_prefix is untouched
+    # and not even reported "present" (it only appears in the Replace rule).
+    assert flipped == ["<|inner_suffix|>"]
+    assert "<|inner_prefix|>" not in capsys.readouterr().out
+    out = json.loads((tmp_path / "tokenizer.json").read_text())
+    assert out["added_tokens"][0]["special"] is False
+    assert out["normalizer"]["normalizers"][0]["content"] == "<|inner_prefix|>"
