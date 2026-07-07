@@ -47,6 +47,19 @@ EXPECTED = {
         },
         "decode": {32: "<|inner_prefix|>", 33: "<|inner_suffix|>"},
     },
+    "Apertus_2": {
+        "encode": {
+            "<|image|>": [18],
+            "<image>": [18],
+            "<|audio|>": [19],
+            "<audio>": [19],
+            "<|img_start|>": [27],
+            "<|audio_annotate|>": [39],
+            "<|visual token 0|>": [200064],
+            "<|audio token 4095|>": [335231],
+        },
+        "decode": {18: "<|image|>", 27: "<|img_start|>", 200064: "<|visual token 0|>"},
+    },
 }
 
 # The reasoning-delimiter fix is applied to Apertus 1.5 only; the 1.0 tokenizer
