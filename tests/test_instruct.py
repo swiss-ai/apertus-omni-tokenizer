@@ -7,6 +7,7 @@ import json
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import Whitespace
+from tokenizers.processors import TemplateProcessing
 from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
 from omnitok.instruct import (
@@ -50,7 +51,20 @@ APERTUS_TEMPLATE = """{{ bos_token }}
 """
 
 
-def _make_tokenizer(chat_template: str | None = None) -> PreTrainedTokenizerFast:
+# Apertus-style template (so create_instruct_tokenizer detects it) that does NOT
+# emit the BOS itself -- the tokenizer-owns case, which must be left untouched.
+BOS_SILENT_TEMPLATE = """{%- set user_token = '<|user_start|>' -%}
+{%- for message in messages -%}
+    {%- if message.role == 'user' -%}
+        {{ user_token }}{{ message.content }}<|user_end|>
+    {%- endif -%}
+{%- endfor -%}
+"""
+
+
+def _make_tokenizer(
+    chat_template: str | None = None, *, bos_post_processor: bool = False
+) -> PreTrainedTokenizerFast:
     tokens = [
         "<unk>",
         "<s>",
@@ -69,6 +83,14 @@ def _make_tokenizer(chat_template: str | None = None) -> PreTrainedTokenizerFast
     vocab = {token: idx for idx, token in enumerate(tokens)}
     tokenizer = Tokenizer(WordLevel(vocab, unk_token="<unk>"))
     tokenizer.pre_tokenizer = Whitespace()
+    if bos_post_processor:
+        # Mimic the real Apertus/LLaMA base tokenizer, whose post-processor
+        # auto-prepends <s> on add_special_tokens=True.
+        tokenizer.post_processor = TemplateProcessing(
+            single="<s> $A",
+            pair="<s> $A <s> $B:1",
+            special_tokens=[("<s>", 1)],
+        )
     fast = PreTrainedTokenizerFast(
         tokenizer_object=tokenizer,
         bos_token="<s>",
@@ -80,8 +102,10 @@ def _make_tokenizer(chat_template: str | None = None) -> PreTrainedTokenizerFast
     return fast
 
 
-def _save_tokenizer(path, chat_template: str | None = None) -> None:
-    tokenizer = _make_tokenizer(chat_template)
+def _save_tokenizer(
+    path, chat_template: str | None = None, *, bos_post_processor: bool = False
+) -> None:
+    tokenizer = _make_tokenizer(chat_template, bos_post_processor=bos_post_processor)
     tokenizer.save_pretrained(path)
 
     config_path = path / "tokenizer_config.json"
@@ -193,3 +217,55 @@ def test_create_instruct_tokenizer_saves_audio_aware_chat_template(tmp_path):
     assert config["audio_end_token"] == tokenizer.encode(
         "<|audio_end|>", add_special_tokens=False
     )
+
+
+def test_create_instruct_tokenizer_strips_bos_when_template_emits_it(tmp_path):
+    """Base auto-prepends <s> AND the template emits {{ bos_token }} -> the
+    builder must make the template the sole owner, so the served tokenizer no
+    longer doubles the BOS (apertus-program #420)."""
+    base_dir = tmp_path / "base"
+    instruct_dir = tmp_path / "instruct"
+    output_dir = tmp_path / "output"
+
+    _save_tokenizer(base_dir, bos_post_processor=True)
+    _write_omnimodal_config(base_dir)
+    _save_tokenizer(instruct_dir, APERTUS_TEMPLATE, bos_post_processor=True)
+
+    create_instruct_tokenizer(str(base_dir), str(instruct_dir), str(output_dir))
+
+    tok = AutoTokenizer.from_pretrained(output_dir, use_fast=True)
+    bos_id = tok.convert_tokens_to_ids("<s>")
+    with_special = tok.encode("hello world", add_special_tokens=True)
+    without_special = tok.encode("hello world", add_special_tokens=False)
+    # Tokenizer no longer auto-prepends the BOS: the two agree, and a
+    # <s>-prefixed (already-rendered) prompt does not become <s><s>.
+    assert with_special == without_special
+    prefixed = tok.encode("<s>hello", add_special_tokens=True)
+    assert not (prefixed[:2] == [bos_id, bos_id])
+
+    with open(output_dir / "tokenizer_config.json", "r", encoding="utf-8") as f:
+        config = json.load(f)
+    assert config.get("add_bos_token") is False
+
+
+def test_create_instruct_tokenizer_keeps_bos_when_template_silent(tmp_path):
+    """If the template does NOT emit the BOS (tokenizer-owns, e.g. Llama-3.1),
+    the builder must leave the post-processor's auto-BOS intact -- otherwise the
+    served prompt would carry zero BOS."""
+    base_dir = tmp_path / "base"
+    instruct_dir = tmp_path / "instruct"
+    output_dir = tmp_path / "output"
+
+    _save_tokenizer(base_dir, bos_post_processor=True)
+    _write_omnimodal_config(base_dir)
+    _save_tokenizer(instruct_dir, BOS_SILENT_TEMPLATE, bos_post_processor=True)
+
+    create_instruct_tokenizer(str(base_dir), str(instruct_dir), str(output_dir))
+
+    tok = AutoTokenizer.from_pretrained(output_dir, use_fast=True)
+    bos_id = tok.convert_tokens_to_ids("<s>")
+    with_special = tok.encode("hello world", add_special_tokens=True)
+    without_special = tok.encode("hello world", add_special_tokens=False)
+    # Auto-BOS retained: add_special_tokens=True still prepends exactly one <s>.
+    assert with_special[0] == bos_id
+    assert with_special[1:] == without_special

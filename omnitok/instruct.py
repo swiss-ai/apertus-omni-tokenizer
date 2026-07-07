@@ -13,7 +13,7 @@ from typing import Any
 
 from transformers import AutoTokenizer
 
-from .io import detect_existing_modalities
+from .io import detect_existing_modalities, strip_bos_from_post_processor
 from .modalities import MODALITY_REGISTRY
 
 
@@ -207,6 +207,23 @@ def create_instruct_tokenizer(
         )
 
     config["chat_template"] = chat_template
+
+    # BOS ownership. The base text tokenizer auto-prepends the BOS on
+    # `add_special_tokens=True`. If the chat template *also* emits it (Apertus'
+    # template renders `{{ bos_token }}`), the two stack into `<s><s>...` on every
+    # `add_special_tokens=True` path -- a train/inference mismatch that
+    # degenerates on hard prompts (apertus-program #420). Make the template the
+    # sole owner: strip the auto-BOS from the post-processor and disable
+    # add_bos_token. Templates that do NOT emit the BOS (e.g. Llama-3.1 style)
+    # keep tokenizer-owns and are left untouched.
+    bos = tokenizer.bos_token
+    template_emits_bos = bool(bos) and ("bos_token" in chat_template or bos in chat_template)
+    if template_emits_bos:
+        config["add_bos_token"] = False
+        if strip_bos_from_post_processor(output_path, bos):
+            print(f"  Template emits {bos!r}; stripped auto-BOS from post-processor (template-owns)")
+        else:
+            print(f"  Template emits {bos!r}; post-processor already BOS-free")
 
     config["sft_user_begin_sequence"] = tokenizer.encode(
         user_header, add_special_tokens=False

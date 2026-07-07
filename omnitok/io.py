@@ -292,6 +292,48 @@ def mark_tokens_non_special(
     return sorted(flipped)
 
 
+def strip_bos_from_post_processor(save_path: str, bos_token: str) -> bool:
+    """Remove the auto-prepended BOS from ``tokenizer.json``'s post-processor.
+
+    When a chat template emits ``{{ bos_token }}`` itself, the tokenizer must
+    NOT also auto-add the BOS: otherwise any ``add_special_tokens=True`` path
+    (``/completions``, vLLM's multimodal tokenization, and every non-chat
+    caller) turns a rendered prompt into ``<s><s>...`` -- a train/inference
+    mismatch that degenerates on hard prompts (apertus-program #420). The base
+    text tokenizer ships a ``TemplateProcessing`` post-processor whose ``single``
+    is ``<s> + A`` (and ``pair`` prepends ``<s>`` to each segment); this drops
+    those ``SpecialToken`` entries so the template becomes the sole BOS owner.
+
+    Edits ``tokenizer.json`` in place (the file is tens of MB; a full json
+    round-trip would reformat it). A post-processor ``SpecialToken`` is a nested
+    object ``{"SpecialToken": {"id": "<s>", "type_id": N}}`` -- unique to the
+    post-processor, so matching on the BOS id is safe file-wide. Only entries
+    followed by another template piece (always the case for a leading/segment
+    BOS) are removed, leaving valid JSON. Idempotent: returns True iff a BOS was
+    removed, False if there was nothing to strip.
+    """
+    path = os.path.join(save_path, "tokenizer.json")
+    if not os.path.exists(path):
+        return False
+    with open(path, "r", encoding="utf-8") as f:
+        text = f.read()
+    # {"SpecialToken": {"id": <bos>, "type_id": N}} plus its trailing comma and
+    # surrounding whitespace. Requiring the trailing comma means we only strip a
+    # BOS that precedes another piece (the Sequence), which is exactly the
+    # double-BOS case and keeps the array well-formed.
+    bos_special = re.compile(
+        r'\{\s*"SpecialToken"\s*:\s*\{\s*"id"\s*:\s*"'
+        + re.escape(bos_token)
+        + r'"\s*,\s*"type_id"\s*:\s*\d+\s*\}\s*\}\s*,\s*'
+    )
+    new_text, n = bos_special.subn("", text)
+    if not n:
+        return False
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(new_text)
+    return True
+
+
 # ── Tokenizer config ─────────────────────────────────────────────────────────
 
 
