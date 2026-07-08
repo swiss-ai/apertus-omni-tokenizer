@@ -83,6 +83,52 @@ while IFS= read -r line; do
   fi
 done <<< "$MANIFEST"
 
+# --- generation_config.json: serving stop-token sanity ------------------------
+# Field-level check, not md5: the file legitimately differs between checkpoints
+# (transformers_version, sampling defaults). eos_token_id must include
+# end-of-sequence, end-of-turn AND end-of-tool-call. Raw training exports
+# ("_from_model_config": true) ship only the config.json eos (68); without 72
+# the engine runs straight past a tool call and the model hallucinates the
+# tool's output (fabricated results, duplicated answer blocks).
+case "$MODEL_NAME" in
+  Apertus_1p5) required_eos_ids="2 68 72" ;;  # </s> <|assistant_end|> <|tools_suffix|>
+  *)           required_eos_ids="" ;;
+esac
+
+if [ -n "$required_eos_ids" ]; then
+  gc="$MODEL_PATH/generation_config.json"
+  if [ ! -f "$gc" ]; then
+    fail "generation_config.json (missing: engines fall back to config.json eos and won't stop at tool calls)"
+    failures=$((failures + 1))
+  else
+    compact="$(tr -d '[:space:]' < "$gc")"
+    case "$compact" in
+      *'"eos_token_id":'*)
+        eos="${compact#*\"eos_token_id\":}"
+        case "$eos" in
+          \[*) eos="${eos#\[}"; eos="${eos%%\]*}" ;;
+          *)   eos="${eos%%[,\}]*}" ;;
+        esac
+        ;;
+      *) eos="" ;;
+    esac
+    eos_ids=" $(printf '%s' "$eos" | tr -c '0-9' ' ') "
+    missing_ids=""
+    for id in $required_eos_ids; do
+      case "$eos_ids" in
+        *" $id "*) ;;
+        *) missing_ids="$missing_ids $id" ;;
+      esac
+    done
+    if [ -z "$missing_ids" ]; then
+      ok "generation_config.json (eos_token_id includes:$(printf ' %s' $required_eos_ids))"
+    else
+      fail "generation_config.json (eos_token_id [$eos] missing id(s):$missing_ids — 2=</s>, 68=<|assistant_end|>, 72=<|tools_suffix|>; a missing 72 means tool calls don't stop and tool output is hallucinated)"
+      failures=$((failures + 1))
+    fi
+  fi
+fi
+
 echo
 if [ "$failures" -ne 0 ]; then
   echo "${RED}FAILED${RESET}: $failures file(s) did not match the canonical $MODEL_NAME tokenizer." >&2
