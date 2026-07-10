@@ -17,7 +17,9 @@
 #   MODEL_NAME   manifest to check against (default: Apertus_1p5)
 #   --fix        download the canonical copy of each missing/mismatched manifest
 #                file from this repo and install it (the existing file, if any,
-#                is saved as <file>.bak first), then re-run the validation.
+#                is saved as <file>.bak first; existing backups are never
+#                overwritten — later runs write <file>.bak.1, .bak.2, ...),
+#                then re-run the validation.
 #                generation_config.json is checked field-level and has no
 #                canonical copy in the repo, so --fix cannot repair it.
 #
@@ -209,10 +211,18 @@ fix_file() {
   fi
 
   if [ -f "$target" ]; then
-    cp -p "$target" "$target.bak"
+    # Never clobber an earlier backup: first run writes <file>.bak, later
+    # runs write <file>.bak.1, .bak.2, ...
+    bak="$target.bak"
+    n=0
+    while [ -e "$bak" ]; do
+      n=$((n + 1))
+      bak="$target.bak.$n"
+    done
+    cp -p "$target" "$bak"
     mv "$tmp" "$target"
     chmod 644 "$target"
-    ok "$fname (replaced; original saved as $fname.bak)"
+    ok "$fname (replaced; original saved as ${bak##*/})"
   else
     mv "$tmp" "$target"
     chmod 644 "$target"
