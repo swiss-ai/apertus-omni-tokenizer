@@ -66,6 +66,20 @@ def test_tokenizer_loads(tok_dir):
 @pytest.mark.parametrize(
     "tok_dir", TOKENIZER_DIRS, ids=[p.name for p in TOKENIZER_DIRS]
 )
+def test_config_is_hub_parseable(tok_dir):
+    """tokenizer_config.json carries no added_tokens_decoder (it duplicates
+    tokenizer.json's added_tokens and at omni scale is ~25 MB, past the Hub's
+    config-parsing limit — "cannot be fetched (too big)" on the repo page)."""
+    config_path = tok_dir / "tokenizer_config.json"
+    with open(config_path) as f:
+        config = json.load(f)
+    assert "added_tokens_decoder" not in config
+    assert config_path.stat().st_size < 1_000_000
+
+
+@pytest.mark.parametrize(
+    "tok_dir", TOKENIZER_DIRS, ids=[p.name for p in TOKENIZER_DIRS]
+)
 def test_text_roundtrip(tok_dir):
     """Plain text survives an encode -> decode round trip."""
     tok = AutoTokenizer.from_pretrained(str(tok_dir))

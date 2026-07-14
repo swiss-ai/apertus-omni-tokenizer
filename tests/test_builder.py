@@ -69,6 +69,21 @@ class TestVisionOnly:
         assert "base_vocab_size" in config
         assert config["base_vocab_size"] > 0
 
+    def test_config_has_no_added_tokens_decoder(self, vision_tokenizer):
+        """added_tokens_decoder duplicates tokenizer.json's added_tokens and at
+        full omni scale inflates the config past the Hub's parsing limit
+        ("cannot be fetched (too big)"). It must be stripped on save, and the
+        reloaded tokenizer must rebuild every added token from tokenizer.json."""
+        with open(os.path.join(vision_tokenizer, "tokenizer_config.json")) as f:
+            config = json.load(f)
+        assert "added_tokens_decoder" not in config
+
+        with open(os.path.join(vision_tokenizer, "tokenizer.json")) as f:
+            added = json.load(f)["added_tokens"]
+        tok = AutoTokenizer.from_pretrained(vision_tokenizer)
+        rebuilt = {i: t.content for i, t in tok.added_tokens_decoder.items()}
+        assert rebuilt == {e["id"]: e["content"] for e in added}
+
     def test_content_tokens_contiguous(self, vision_tokenizer):
         tok = AutoTokenizer.from_pretrained(vision_tokenizer)
         offset = _omnimodal_entry(vision_tokenizer, "vision")["offset"]

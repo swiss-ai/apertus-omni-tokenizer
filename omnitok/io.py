@@ -178,6 +178,7 @@ def add_token_alias(
     tok._tokenizer = Tokenizer.from_str(json.dumps(state))
     if save:
         tok.save_pretrained(save_path)
+        strip_added_tokens_decoder(save_path)
     print(f"  Added alias {alias} -> {token}")
 
 
@@ -295,6 +296,31 @@ def mark_tokens_non_special(
 # ── Tokenizer config ─────────────────────────────────────────────────────────
 
 
+def strip_added_tokens_decoder(save_path: str) -> None:
+    """Drop ``added_tokens_decoder`` from ``tokenizer_config.json`` on disk.
+
+    ``save_pretrained()`` mirrors every added token into this config field.
+    With ~136k omni content tokens that inflates the config to ~25 MB, which
+    exceeds the Hub's config-parsing limit and triggers "Config file
+    tokenizer_config.json cannot be fetched (too big)" on the repo page. The
+    field duplicates ``tokenizer.json``'s ``added_tokens`` entry-for-entry and
+    fast tokenizers rebuild it from there at load time, so dropping it does
+    not change the loaded tokenizer. Skipped if ``tokenizer.json`` is absent
+    (the config would then be the only record of the added tokens).
+    """
+    if not os.path.exists(os.path.join(save_path, "tokenizer.json")):
+        return
+    config_path = os.path.join(save_path, "tokenizer_config.json")
+    if not os.path.exists(config_path):
+        return
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = json.load(f)
+    if config.pop("added_tokens_decoder", None) is None:
+        return
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+
+
 def write_tokenizer_config(
     save_path: str,
     tokenizer,
@@ -320,6 +346,12 @@ def write_tokenizer_config(
     config_path = os.path.join(save_path, "tokenizer_config.json")
     with open(config_path, "r", encoding="utf-8") as f:
         config = json.load(f)
+
+    # save_pretrained() mirrors all added tokens here; with omni content
+    # tokens that is ~25 MB and breaks Hub config parsing. tokenizer.json's
+    # added_tokens is the authoritative copy (see strip_added_tokens_decoder).
+    if os.path.exists(os.path.join(save_path, "tokenizer.json")):
+        config.pop("added_tokens_decoder", None)
 
     actual_vocab_size = len(tokenizer.get_vocab())
     config["vocab_size"] = actual_vocab_size
