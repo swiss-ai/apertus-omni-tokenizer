@@ -16,7 +16,7 @@ from .io import (
     build_omnimodal_config,
     detect_existing_modalities,
     mark_tokens_non_special,
-    rename_reserved_token,
+    rename_reserved_tokens,
     save_tokenizer,
     write_tokenizer_config,
 )
@@ -151,9 +151,11 @@ def add_modality(
 
     # Rename structure tokens
     print(f"\nRenaming RESERVED_OMNI tokens to {mc.name} structure tokens...")
-    for rename in mc.structure_tokens:
-        old = f"<|RESERVED_OMNI_{rename.reserved_index:03d}|>"
-        rename_reserved_token(output_path, tokenizer, old, rename.target_name)
+    renames = {
+        f"<|RESERVED_OMNI_{r.reserved_index:03d}|>": r.target_name
+        for r in mc.structure_tokens
+    }
+    rename_reserved_tokens(output_path, tokenizer, renames)
 
     # Reload so returned tokenizer has renames applied.
     tokenizer = AutoTokenizer.from_pretrained(output_path, use_fast=True)

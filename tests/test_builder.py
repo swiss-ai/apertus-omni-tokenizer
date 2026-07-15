@@ -15,7 +15,11 @@ from omnitok import (
     get_content_token_id,
     load_modality_mapping,
 )
-from omnitok.io import build_omnimodal_config
+from omnitok.io import (
+    build_omnimodal_config,
+    rename_reserved_token,
+    rename_reserved_tokens,
+)
 from omnitok.modalities import MODALITY_REGISTRY, VISION, AUDIO
 
 BASE_TOKENIZER = "swiss-ai/Apertus-8B-2509"
@@ -262,13 +266,17 @@ class TestExtraConfig:
 # ── Omnimodal derivation (synthetic, no network) ─────────────────────────────
 
 
+def _synthetic_tokenizer(tokens, *, special=False):
+    backend = Tokenizer(models.WordLevel({"<unk>": 0}, unk_token="<unk>"))
+    tok = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="<unk>")
+    tok.add_tokens(tokens, special_tokens=special)
+    return tok
+
+
 class TestOmnimodalDerivation:
     @staticmethod
     def _synthetic(tokens):
-        backend = Tokenizer(models.WordLevel({"<unk>": 0}, unk_token="<unk>"))
-        tok = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="<unk>")
-        tok.add_tokens(tokens)
-        return tok
+        return _synthetic_tokenizer(tokens)
 
     def test_derives_offset_and_vocab_size(self):
         tok = self._synthetic(
@@ -345,3 +353,74 @@ def test_is_apertus_1p5_gate():
     assert _is_apertus_1p5(_Tok({"<|inner_prefix|>": 32, "<|inner_suffix|>": 33}))
     assert not _is_apertus_1p5(_Tok({"<|inner_prefix|>": 69, "<|inner_suffix|>": 70}))
     assert not _is_apertus_1p5(_Tok({"<|inner_prefix|>": 32}))  # partial -> no
+
+
+class TestRenameReservedTokens:
+    @staticmethod
+    def _saved(tmp_path, tokens):
+        tok = _synthetic_tokenizer(tokens, special=True)
+        path = str(tmp_path / "tok")
+        tok.save_pretrained(path)
+        return tok, path
+
+    def test_config_string_values_are_renamed(self, tmp_path):
+        tok, path = self._saved(tmp_path, ["<A>"])
+        config_path = os.path.join(path, "tokenizer_config.json")
+        with open(config_path) as f:
+            config = json.load(f)
+        config["probe"] = "<A>"
+        with open(config_path, "w") as f:
+            json.dump(config, f)
+
+        rename_reserved_tokens(path, tok, {"<A>": "<|img_start|>"})
+
+        with open(config_path) as f:
+            config = json.load(f)
+        assert config["probe"] == "<|img_start|>"
+
+    def test_all_absent_leaves_files_byte_identical(self, tmp_path):
+        tok, path = self._saved(tmp_path, ["<A>"])
+        before = {
+            name: open(os.path.join(path, name), "rb").read()
+            for name in ("tokenizer.json", "tokenizer_config.json")
+        }
+        rename_reserved_tokens(path, tok, {"<MISSING>": "<X>"})
+        for name, content in before.items():
+            assert open(os.path.join(path, name), "rb").read() == content
+
+    def test_rejects_chained_renames(self, tmp_path):
+        tok, path = self._saved(tmp_path, ["<A>", "<B>"])
+        with pytest.raises(ValueError, match="overlap"):
+            rename_reserved_tokens(path, tok, {"<A>": "<B>", "<B>": "<C>"})
+
+    def test_rejects_duplicate_targets(self, tmp_path):
+        tok, path = self._saved(tmp_path, ["<A>", "<B>"])
+        with pytest.raises(ValueError, match="duplicate"):
+            rename_reserved_tokens(path, tok, {"<A>": "<C>", "<B>": "<C>"})
+
+    def test_rejects_existing_target(self, tmp_path):
+        tok, path = self._saved(tmp_path, ["<A>", "<B>"])
+        with pytest.raises(ValueError, match="already in the vocabulary"):
+            rename_reserved_tokens(path, tok, {"<A>": "<B>"})
+
+    def test_absent_source_with_existing_target_skips(self, tmp_path):
+        tok, path = self._saved(tmp_path, ["<|image|>"])
+        before = open(os.path.join(path, "tokenizer.json"), "rb").read()
+        rename_reserved_tokens(path, tok, {"<|RESERVED_OMNI_007|>": "<|image|>"})
+        assert open(os.path.join(path, "tokenizer.json"), "rb").read() == before
+
+    def test_single_token_wrapper(self, tmp_path):
+        tok, path = self._saved(tmp_path, ["<A>"])
+        before = tok.convert_tokens_to_ids("<A>")
+        rename_reserved_token(path, tok, "<A>", "<|img_start|>")
+        after = AutoTokenizer.from_pretrained(path)
+        assert after.convert_tokens_to_ids("<|img_start|>") == before
+
+    def test_ids_never_move(self, tmp_path):
+        tok, path = self._saved(tmp_path, ["<A>", "<B>"])
+        renamed_id = tok.convert_tokens_to_ids("<A>")
+        bystander_id = tok.convert_tokens_to_ids("<B>")
+        rename_reserved_tokens(path, tok, {"<A>": "<|img_start|>"})
+        after = AutoTokenizer.from_pretrained(path)
+        assert after.convert_tokens_to_ids("<|img_start|>") == renamed_id
+        assert after.convert_tokens_to_ids("<B>") == bystander_id
