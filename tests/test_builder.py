@@ -259,6 +259,42 @@ class TestExtraConfig:
         assert config["vision_tokenizer"]["type"] == "Emu3.5"
 
 
+# ── Slim config ──────────────────────────────────────────────────────────────
+
+
+class TestSlimConfig:
+    """The build drops the config's added-token mirror (``added_tokens_decoder``
+    on transformers 4.x, ``extra_special_tokens`` on 5.x) so
+    ``tokenizer_config.json`` stays under the Hub's config-parsing limit, while
+    every token stays defined -- and ``special`` -- in ``tokenizer.json``."""
+
+    def test_config_has_no_added_token_mirror(self, stacked_tokenizer):
+        with open(os.path.join(stacked_tokenizer, "tokenizer_config.json")) as f:
+            config = json.load(f)
+        assert "added_tokens_decoder" not in config
+        assert "extra_special_tokens" not in config
+
+    def test_config_is_hub_parseable(self, stacked_tokenizer):
+        size = os.path.getsize(
+            os.path.join(stacked_tokenizer, "tokenizer_config.json")
+        )
+        assert size < 1_000_000
+
+    def test_content_tokens_stay_special_in_tokenizer_json(self, stacked_tokenizer):
+        with open(os.path.join(stacked_tokenizer, "tokenizer.json")) as f:
+            tj = json.load(f)
+        added = {t["content"]: t for t in tj["added_tokens"]}
+        for name in ("<|visual token 0|>", "<|audio token 0|>"):
+            assert added[name]["special"] is True
+
+    def test_content_token_skipped_under_skip_special(self, stacked_tokenizer):
+        tok = AutoTokenizer.from_pretrained(stacked_tokenizer)
+        tid = tok.convert_tokens_to_ids("<|audio token 0|>")
+        assert tid != tok.unk_token_id
+        assert tok.decode([tid], skip_special_tokens=True) == ""
+        assert tok.decode([tid], skip_special_tokens=False) == "<|audio token 0|>"
+
+
 # ── Omnimodal derivation (synthetic, no network) ─────────────────────────────
 
 

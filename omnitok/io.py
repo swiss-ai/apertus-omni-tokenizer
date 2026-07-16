@@ -178,6 +178,9 @@ def add_token_alias(
     tok._tokenizer = Tokenizer.from_str(json.dumps(state))
     if save:
         tok.save_pretrained(save_path)
+        # save_pretrained re-mirrors every added token into the config; this is
+        # the last on-disk write here (no reload follows), so slim it now.
+        slim_tokenizer_config(save_path)
     print(f"  Added alias {alias} -> {token}")
 
 
@@ -335,6 +338,48 @@ def write_tokenizer_config(
         else:
             config.pop("omnimodal_config", None)
 
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(config, f, indent=2)
+
+
+def slim_tokenizer_config(save_path: str) -> None:
+    """Drop the redundant added-token mirrors from ``tokenizer_config.json``.
+
+    ``save_pretrained()`` mirrors every added token into the config -- on
+    transformers 4.x as the ``added_tokens_decoder`` map (~25 MB once the omni
+    content tokens are added), on 5.x as the ``extra_special_tokens`` list (the
+    last modality's content tokens). Both duplicate ``tokenizer.json``'s
+    ``added_tokens``, which fast tokenizers rebuild from at load time, so
+    dropping them does not change the loaded tokenizer: every token stays
+    defined -- and ``special`` -- in ``tokenizer.json``. Removing them keeps the
+    config under the Hub's config-parsing limit; the 25 MB config otherwise
+    triggers "Config file tokenizer_config.json cannot be fetched (too big)" on
+    the model page.
+
+    Call this only *after* the final reload of a build step. On 4.x the
+    *presence* of ``added_tokens_decoder`` selects the modern load path, and
+    reloading a stripped config there falls back to ``special_tokens_map.json``
+    -- which the rename step leaves stale -- resurrecting the reserved-slot
+    names (apertus-omni-tokenizer#21). transformers 5.x, the supported build
+    stack, has no such fallback, so a stripped config reloads cleanly.
+
+    Skipped if ``tokenizer.json`` is absent (the config would then be the only
+    record of the added tokens).
+    """
+    if not os.path.exists(os.path.join(save_path, "tokenizer.json")):
+        return
+    config_path = os.path.join(save_path, "tokenizer_config.json")
+    if not os.path.exists(config_path):
+        return
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = json.load(f)
+    removed = [
+        key
+        for key in ("added_tokens_decoder", "extra_special_tokens")
+        if config.pop(key, None) is not None
+    ]
+    if not removed:
+        return
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
 

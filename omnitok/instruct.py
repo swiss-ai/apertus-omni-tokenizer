@@ -13,7 +13,7 @@ from typing import Any
 
 from transformers import AutoTokenizer
 
-from .io import detect_existing_modalities
+from .io import detect_existing_modalities, slim_tokenizer_config
 from .modalities import MODALITY_REGISTRY
 
 
@@ -238,6 +238,10 @@ def create_instruct_tokenizer(
 
     # Reload from output so returned tokenizer has chat_template set
     tokenizer = AutoTokenizer.from_pretrained(output_path, use_fast=True)
+
+    # Keep the config Hub-parseable if the base carried an added-token mirror
+    # (e.g. an unslimmed base built on an older transformers).
+    slim_tokenizer_config(output_path)
 
     print(f"\nSaved to {output_path}")
     return tokenizer, stats

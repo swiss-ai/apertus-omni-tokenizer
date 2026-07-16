@@ -18,6 +18,7 @@ from .io import (
     mark_tokens_non_special,
     rename_reserved_token,
     save_tokenizer,
+    slim_tokenizer_config,
     write_tokenizer_config,
 )
 from .modalities import MODALITY_REGISTRY, ModalityConfig
@@ -197,6 +198,10 @@ def add_modality(
 
     # Reload after all file mutations so the returned tokenizer matches disk.
     tokenizer = AutoTokenizer.from_pretrained(output_path, use_fast=True)
+
+    # Drop the config's added-token mirror now that every reload is done, so the
+    # shipped tokenizer_config.json stays Hub-parseable (see slim_tokenizer_config).
+    slim_tokenizer_config(output_path)
 
     # Verification
     _print_verification(tokenizer, mc, vocab_size)
