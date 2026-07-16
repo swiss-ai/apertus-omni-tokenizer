@@ -163,7 +163,13 @@ class TestAliasNormalizerChain:
         self._assert_aliases_resolve(base)
 
     def test_alias_target_flag_set_at_creation(self, tmp_path):
-        """A normalized=False target is switched to True, in both saved files."""
+        """A normalized=False target is switched to True in tokenizer.json.
+
+        tokenizer.json is the authoritative record of the added tokens. The old
+        assertion also read the config's added_tokens_decoder mirror, but
+        transformers 5.x no longer writes that field when a tokenizer.json is
+        present, so the flag is only checked there.
+        """
         base = self._make_base(tmp_path, normalizers.NFC(), normalized=False)
         add_token_alias(base, "<|image|>", "<image>")
         add_token_alias(base, "<|audio|>", "<audio>")
@@ -173,12 +179,6 @@ class TestAliasNormalizerChain:
             tj = json.load(f)
         flags = {e["content"]: e["normalized"] for e in tj["added_tokens"]}
         assert flags["<|image|>"] is True and flags["<|audio|>"] is True
-        with open(f"{base}/tokenizer_config.json") as f:
-            cfg = json.load(f)
-        cfg_flags = {
-            e["content"]: e["normalized"] for e in cfg["added_tokens_decoder"].values()
-        }
-        assert cfg_flags["<|image|>"] is True and cfg_flags["<|audio|>"] is True
 
     def test_realias_is_idempotent(self, tmp_path):
         base = self._make_base(tmp_path, normalizers.NFC())
