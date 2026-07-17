@@ -5,11 +5,15 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "omnitok"
 version = "0.1.0"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
-    "transformers",
-    "tokenizers",
-    "huggingface_hub",
+    # transformers 5.x stopped mirroring added tokens into tokenizer_config.json's
+    # added_tokens_decoder (the ~25 MB Hub-parsing bloat) and requires Python >=3.10.
+    # This project targets that behavior; a 4.x install would re-inflate the config
+    # on rebuild. Cap below 6 since save_pretrained serialization changes by major.
+    "transformers>=5,<6",
+    "tokenizers>=0.22,<0.24",
+    "huggingface_hub>=1.5,<2",
 ]
 
 [project.optional-dependencies]
