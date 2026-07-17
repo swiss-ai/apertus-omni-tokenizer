@@ -256,7 +256,7 @@ def create_instruct_tokenizer(
 
     # Save config
     with open(config_path, "w") as f:
-        json.dump(config, f, indent=2)
+        f.write(json.dumps(config, indent=2))
 
     # Reload from output so returned tokenizer has chat_template set
     tokenizer = AutoTokenizer.from_pretrained(output_path, use_fast=True)

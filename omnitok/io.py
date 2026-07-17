@@ -64,7 +64,11 @@ def _resolve_tokenizer_path(tokenizer_path: str, revision: str | None = None) ->
         return tokenizer_path
 
     try:
-        return snapshot_download(tokenizer_path, revision=revision)
+        return snapshot_download(
+            tokenizer_path,
+            revision=revision,
+            allow_patterns=["*.json", "*.jinja", "*.txt", "*.model"],
+        )
     except (HFValidationError, RepositoryNotFoundError, OSError) as e:
         raise FileNotFoundError(
             f"'{tokenizer_path}' is not a local directory and could not be "
