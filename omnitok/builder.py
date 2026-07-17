@@ -12,6 +12,7 @@ from tokenizers import AddedToken
 from transformers import AutoTokenizer
 
 from .io import (
+    _resolve_tokenizer_path,
     add_token_alias,
     build_omnimodal_config,
     detect_existing_modalities,
@@ -31,6 +32,7 @@ def add_modality(
     *,
     num_reserved_tokens: int = 200,
     extra_config: dict[str, Any] | None = None,
+    revision: str | None = None,
 ) -> tuple[Any, dict[str, Any]]:
     """Add a modality to a tokenizer.
 
@@ -45,6 +47,9 @@ def add_modality(
         num_reserved_tokens: RESERVED_OMNI slots (default 200).
         extra_config: Optional metadata for tokenizer_config.json
                       (e.g. {"type": "Emu3.5", "path": "/path/to/model"}).
+        revision: Hub commit to pin when input_tokenizer_path is a repo ID.
+                  Hub repos are mutable (tokens can be renamed upstream after
+                  release), so reproducible builds should pin one.
 
     Returns:
         (tokenizer, stats) tuple.
@@ -57,6 +62,8 @@ def add_modality(
     print("=" * 60)
     print(f"ADDING MODALITY: {mc.name}")
     print("=" * 60)
+
+    input_tokenizer_path = _resolve_tokenizer_path(input_tokenizer_path, revision=revision)
 
     # Detect existing state
     existing = detect_existing_modalities(input_tokenizer_path)
