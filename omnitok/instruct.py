@@ -13,7 +13,7 @@ from typing import Any
 
 from transformers import AutoTokenizer
 
-from .io import detect_existing_modalities
+from .io import _resolve_tokenizer_path, detect_existing_modalities
 from .modalities import MODALITY_REGISTRY
 
 
@@ -136,6 +136,7 @@ def create_instruct_tokenizer(
     output_path: str,
     *,
     chat_template_file: str | None = None,
+    instruct_revision: str | None = None,
 ) -> tuple[Any, dict[str, Any]]:
     """Add chat template and SFT sequences to a base omni-tokenizer.
 
@@ -147,6 +148,8 @@ def create_instruct_tokenizer(
         chat_template_file: Path to a Jinja file to use as the chat template
             instead of loading one from instruct_tokenizer_path. Exactly one
             of the two sources must be provided.
+        instruct_revision: Hub commit to pin when instruct_tokenizer_path is a
+            repo ID; Hub repos are mutable, so reproducible builds should pin.
 
     Returns:
         (tokenizer, stats) tuple.
@@ -179,6 +182,9 @@ def create_instruct_tokenizer(
         if not chat_template:
             raise ValueError(f"Chat template file {chat_template_file} is empty.")
     else:
+        instruct_tokenizer_path = _resolve_tokenizer_path(
+            instruct_tokenizer_path, revision=instruct_revision
+        )
         instruct_tokenizer = AutoTokenizer.from_pretrained(instruct_tokenizer_path)
         chat_template = instruct_tokenizer.chat_template
         if not chat_template:
