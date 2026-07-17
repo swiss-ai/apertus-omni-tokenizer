@@ -389,7 +389,7 @@ def write_tokenizer_config(
             config.pop("omnimodal_config", None)
 
     with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=2)
+        f.write(json.dumps(config, indent=2))
 
 
 def save_tokenizer(
