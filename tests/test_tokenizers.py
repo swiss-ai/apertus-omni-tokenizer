@@ -114,6 +114,45 @@ def test_reasoning_delimiters_survive_skip_special(tok_dir):
         assert tok.decode([token_id], skip_special_tokens=True) == expected, token_id
 
 
+def test_apertus_1p5_base_layout_guards_against_wrong_base():
+    """Lock the Apertus 1.5 special-token layout in the checked-in artifact.
+
+    The canonical is built from a 1.5 base that is *derived* from the public
+    ``swiss-ai/Apertus-8B-2509`` base (which ships the Apertus 1.0 layout) by:
+
+      * swapping ``<think>`` <-> ``<|inner_prefix|>``  (ids 32 <-> 69)
+      * swapping ``</think>`` <-> ``<|inner_suffix|>`` (ids 33 <-> 70)
+      * renaming ``<SPECIAL_73>``/``<SPECIAL_74>`` -> ``<|tool_output_start|>``/
+        ``<|tool_output_end|>`` (ids 73/74)
+
+    Building directly from the *public* 1.0 base instead leaves ``<think>`` at
+    32/33 and ``<|inner_prefix|>`` at 69/70, has no tool-output tokens, and --
+    because ``_is_apertus_1p5()`` keys on ``<|inner_prefix|>`` being at id 32 --
+    silently skips the reasoning-delimiter fix, producing a tokenizer that
+    mismatches the trained model. This test fails if such a wrong-base tokenizer
+    is ever committed here, so the drift can never ship silently.
+    """
+    tj = json.loads(
+        (TOKENIZERS_DIR / "Apertus_1p5" / "tokenizer.json").read_text()
+    )
+    added = {a["content"]: a for a in tj["added_tokens"]}
+    vocab = tj["model"]["vocab"]
+
+    # 1.5 reasoning delimiters at 32/33, non-special so a reasoning parser can
+    # find them under the default skip_special_tokens=True.
+    assert vocab["<|inner_prefix|>"] == 32 and vocab["<|inner_suffix|>"] == 33
+    assert added["<|inner_prefix|>"]["special"] is False
+    assert added["<|inner_suffix|>"]["special"] is False
+
+    # Tool-output tokens present at 73/74.
+    assert vocab["<|tool_output_start|>"] == 73
+    assert vocab["<|tool_output_end|>"] == 74
+
+    # 1.0-layout signatures (the wrong-base trap) must be absent.
+    assert "<think>" not in added and "</think>" not in added
+    assert "<SPECIAL_73>" not in vocab and "<SPECIAL_74>" not in vocab
+
+
 def test_mark_tokens_non_special_flips_and_is_idempotent(tmp_path):
     """mark_tokens_non_special flips only the reasoning delimiters' `special`
     flag across tokenizer.json + tokenizer_config.json, leaves other tokens and

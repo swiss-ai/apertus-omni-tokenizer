@@ -36,6 +36,17 @@ add_modality("./omni_vision", "./omni_vision_audio", "audio", vocab_size=4096)
 create_instruct_tokenizer("./omni_vision_audio", "swiss-ai/Apertus-8B-2509-Instruct", "./omni_instruct")
 ```
 
+> **The public base is not the Apertus 1.5 base — do not regenerate the checked-in `Apertus_1p5` from it.**
+> The public `swiss-ai/Apertus-8B-2509` ships the Apertus **1.0** layout: `<think>`/`</think>` at ids 32/33,
+> `<|inner_prefix|>`/`<|inner_suffix|>` at 69/70, and `<SPECIAL_73>`/`<SPECIAL_74>` at 73/74. The canonical
+> `Apertus_1p5` was built from a **1.5 base** derived from it by swapping `<think>` <-> `<|inner_prefix|>`
+> (32 <-> 69) and `</think>` <-> `<|inner_suffix|>` (33 <-> 70), and renaming `<SPECIAL_73>`/`<SPECIAL_74>` to
+> `<|tool_output_start|>`/`<|tool_output_end|>`, plus extra normalizer alias rules. Building straight from the
+> public 1.0 base puts `<|inner_prefix|>` at 69 instead of 32, so `_is_apertus_1p5()` returns False and the
+> reasoning-delimiter fix is **silently skipped** — the result mismatches the trained model. The checked-in
+> artifacts are the source of truth; `tests/test_tokenizers.py::test_apertus_1p5_base_layout_guards_against_wrong_base`
+> fails if a wrong-base tokenizer is ever committed.
+
 ## Token layout
 
 ```
