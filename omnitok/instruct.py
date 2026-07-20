@@ -255,7 +255,7 @@ def create_instruct_tokenizer(
             print(f"  {name}_end_token: {end_ids} ({mc.end_token})")
 
     # Save config
-    with open(config_path, "w") as f:
+    with open(config_path, "w", encoding="utf-8") as f:
         f.write(json.dumps(config, indent=2))
 
     # Reload from output so returned tokenizer has chat_template set
