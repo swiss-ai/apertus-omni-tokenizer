@@ -662,7 +662,7 @@
     },
     {
       "id": 73,
-      "content": "<|image|>",
+      "content": "<SPECIAL_73>",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -9176,7 +9176,7 @@
       "<|inner_suffix|>": 70,
       "<|tools_prefix|>": 71,
       "<|tools_suffix|>": 72,
-      "<|image|>": 73,
+      "<SPECIAL_73>": 73,
       "<SPECIAL_74>": 74,
       "<SPECIAL_75>": 75,
       "<SPECIAL_76>": 76,
