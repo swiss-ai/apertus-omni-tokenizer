@@ -35,9 +35,10 @@ EXPECTED = {
             "</think>": [33],
             "<|inner_prefix|>": [69],
             "<|inner_suffix|>": [70],
-            "<|image|>": [73],
+            "<SPECIAL_73>": [73],
         },
         "decode": {32: "<think>", 33: "</think>"},
+        "eos": "<|assistant_end|>",
     },
     "Apertus_1p5": {
         "encode": {
@@ -52,6 +53,20 @@ EXPECTED = {
             "<|audio|>": [131085],
         },
         "decode": {32: "<|inner_prefix|>", 33: "<|inner_suffix|>"},
+        "eos": "</s>",
+        "normalizer_rules": [
+            ("Regex", "<\\|channel\\|?>thought\\s*\\n", "<|inner_prefix|>"),
+            ("String", "<channel|>", "<|inner_suffix|>"),
+            ("String", "<thought>", "<|inner_prefix|>"),
+            ("String", "</thought>", "<|inner_suffix|>"),
+            ("String", "</answer>", ""),
+            ("String", "<answer>", ""),
+            ("Regex", "<\\|inner_suffix\\|>\\s+", "<|inner_suffix|>"),
+            ("String", "<audio>", "<|audio|>"),
+            ("String", "<image>", "<|image|>"),
+            ("String", "<think>", "<|inner_prefix|>"),
+            ("String", "</think>", "<|inner_suffix|>"),
+        ],
     },
 }
 
@@ -102,6 +117,38 @@ def test_special_token_decode(tok_dir):
     tok = AutoTokenizer.from_pretrained(str(tok_dir))
     for token_id, expected in EXPECTED[tok_dir.name]["decode"].items():
         assert tok.decode([token_id]) == expected, token_id
+
+
+@pytest.mark.parametrize(
+    "tok_dir",
+    [p for p in TOKENIZER_DIRS if p.name in EXPECTED],
+    ids=[p.name for p in TOKENIZER_DIRS if p.name in EXPECTED],
+)
+def test_eos_token(tok_dir):
+    """Apertus_1 mirrors upstream's eos; Apertus_1p5 carries the production
+    convention (eos = </s>, turn/tool stops live in generation_config)."""
+    tok = AutoTokenizer.from_pretrained(str(tok_dir))
+    assert tok.eos_token == EXPECTED[tok_dir.name]["eos"]
+
+
+@pytest.mark.parametrize(
+    "tok_dir",
+    [p for p in TOKENIZER_DIRS if "normalizer_rules" in EXPECTED.get(p.name, {})],
+    ids=[p.name for p in TOKENIZER_DIRS if "normalizer_rules" in EXPECTED.get(p.name, {})],
+)
+def test_normalizer_rules(tok_dir):
+    """The canonical's Replace rules, in order: the reasoning-format rewrites
+    (<|channel|>thought / <thought> / <think> -> delimiters, <answer> strips,
+    whitespace collapse) and the modality aliases. The rule set lives only in
+    the artifact; this pins it against silent drift."""
+    with open(tok_dir / "tokenizer.json") as f:
+        norm = json.load(f)["normalizer"]
+    rules = []
+    for r in norm["normalizers"]:
+        if r["type"] == "Replace":
+            kind = "Regex" if "Regex" in r["pattern"] else "String"
+            rules.append((kind, r["pattern"][kind], r["content"]))
+    assert rules == [tuple(r) for r in EXPECTED[tok_dir.name]["normalizer_rules"]]
 
 
 @pytest.mark.parametrize(
