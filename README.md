@@ -1,40 +1,38 @@
 # omnitok
 
-This package documents the chat templates and core tokenizers used in Apertus, and provides utilities for extending LLaMA-3/Apertus text tokenizers with additional vision and audio modalities.
+This repo builds the Apertus 1.5 tokenizer
+([apertus-ai/Apertus-v1.5-8B-RC](https://huggingface.co/apertus-ai/Apertus-v1.5-8B-RC))
+from the Apertus 1 base
+([swiss-ai/Apertus-8B-Instruct-2509](https://huggingface.co/swiss-ai/Apertus-8B-Instruct-2509)),
+and documents the chat templates and canonical tokenizer files for both releases.
 
-## Extension Scripts
+## Building the Apertus 1.5 tokenizer
 
 ```bash
-# Add vision
-python -m omnitok.cli add-modality \
-    --input-tokenizer swiss-ai/Apertus-8B-2509 \
-    --output-path ./omni_vision \
-    --modality vision \
-    --vocab-size 131072
+# From the pinned canonical base on the Hub
+python -m omnitok.cli --output-path ./Apertus_1p5
 
-# Stack audio on top
-python -m omnitok.cli add-modality \
-    --input-tokenizer ./omni_vision \
-    --output-path ./omni_vision_audio \
-    --modality audio \
-    --vocab-size 4096
-
-# Add instruct (chat template + SFT sequences)
-python -m omnitok.cli add-instruct \
-    --base-tokenizer-path ./omni_vision_audio \
-    --instruct-tokenizer-path swiss-ai/Apertus-8B-2509-Instruct \
-    --output-path ./omni_instruct
+# Offline, from the checked-in copy of the base
+python -m omnitok.cli --output-path ./Apertus_1p5 --base-tokenizer tokenizers/Apertus_1
 ```
 
 Or as a library:
 
 ```python
-from omnitok import add_modality, create_instruct_tokenizer
+from omnitok import build_apertus_1p5
 
-add_modality("swiss-ai/Apertus-8B-2509", "./omni_vision", "vision", vocab_size=131072)
-add_modality("./omni_vision", "./omni_vision_audio", "audio", vocab_size=4096)
-create_instruct_tokenizer("./omni_vision_audio", "swiss-ai/Apertus-8B-2509-Instruct", "./omni_instruct")
+build_apertus_1p5("./Apertus_1p5")
 ```
+
+The output is byte-identical to the canonical artifact (the manifest under
+`validation/` pins the md5 of every file, and `tests/test_apertus_recipe.py`
+rebuilds and checks this). The full recipe — reasoning-delimiter renames, tool
+output tokens, normalizer alias/cleanup rules, vision + audio modalities, chat
+template, SFT sequences — is encoded in `omnitok/apertus.py`; that module's
+docstring is the audit trail of every delta between Apertus 1 and 1.5,
+including the canonical quirks that are reproduced on purpose. Do not hand-edit
+tokenizer files: change the recipe (or the chat template under
+`chat_templates/Apertus_1p5/`) and rebuild.
 
 ## Token layout
 
@@ -59,7 +57,16 @@ create_instruct_tokenizer("./omni_vision_audio", "swiss-ai/Apertus-8B-2509-Instr
 
 ## Token aliases
 
-`<image>` and `<|image|>` encode to the same token ID. Same for `<audio>` / `<|audio|>`. Handled by the tokenizer's normalizer -- no manual `.replace()` needed in data loaders.
+`<image>` and `<|image|>` encode to the same token ID, handled by the
+tokenizer's normalizer -- no manual `.replace()` needed in data loaders.
+`<think>`/`</think>` are likewise aliased to `<|inner_prefix|>`/`<|inner_suffix|>`
+(ids 32/33).
+
+Known canonical quirk: the `<audio>` -> `<|audio|>` alias rule exists in the
+normalizer but does **not** work in the shipped 1.5 artifact (`<|audio|>` was
+left `normalized: false`, so `<audio>` encodes as plain text). The build
+reproduces this as-is; fixing it means shipping a new tokenizer release. Use
+the literal `<|audio|>` in data.
 
 ## Known codebook sizes
 
@@ -124,20 +131,20 @@ apertus-omni-tokenizer/
 ├── validate_model.sh        # verify a served model dir matches canonical md5s
 ├── omnitok/
 │   ├── __init__.py      # public API exports
+│   ├── apertus.py       # build_apertus_1p5() -- the Apertus 1 -> 1.5 recipe
 │   ├── modalities.py    # ModalityConfig dataclass, built-in VISION/AUDIO configs
-│   ├── builder.py       # add_modality() -- the main engine
+│   ├── builder.py       # add_modality() -- modality engine (driven by the recipe)
 │   ├── instruct.py      # create_instruct_tokenizer() -- chat template + SFT sequences
 │   ├── io.py            # low-level file I/O (rename, alias, detect, save)
 │   └── cli.py           # CLI wrapper (python -m omnitok.cli)
 ├── tests/
-│   ├── conftest.py           # shared fixtures
-│   ├── test_alias.py         # token alias tests (<image> == <|image|>)
-│   ├── test_builder.py       # add_modality tests
-│   ├── test_chat_template.py # add chat template test
-│   ├── test_task_tokens.py   # task token contract tests
-│   └── test_tokenizers.py    # checked-in tokenizers load + special-token IDs
-├── examples/
-│   └── rename_tool_tokens.py # Script used to add new special tokens in tool calling parsing
+│   ├── conftest.py             # shared fixtures
+│   ├── test_alias.py           # token alias tests (<image> == <|image|>)
+│   ├── test_apertus_recipe.py  # build reproduces the canonical 1.5 byte-for-byte
+│   ├── test_builder.py         # add_modality tests
+│   ├── test_chat_template.py   # add chat template test
+│   ├── test_task_tokens.py     # task token contract tests
+│   └── test_tokenizers.py      # checked-in tokenizers load + special-token IDs
 ├── tokenizers/
 │   ├── Apertus_1/            # Instructed tokenizer used for Apertus 1.0
 │   │   ├── tokenizer.json

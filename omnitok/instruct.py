@@ -132,19 +132,29 @@ def _patch_apertus_chat_template(chat_template: str) -> str:
 
 def create_instruct_tokenizer(
     base_tokenizer_path: str,
-    instruct_tokenizer_path: str,
+    instruct_tokenizer_path: str | None,
     output_path: str,
+    *,
+    chat_template_file: str | None = None,
 ) -> tuple[Any, dict[str, Any]]:
     """Add chat template and SFT sequences to a base omni-tokenizer.
 
     Args:
         base_tokenizer_path: Path to base omni-tokenizer (with modality tokens).
         instruct_tokenizer_path: Path or HF model ID for chat template source.
+            May be None when chat_template_file is given.
         output_path: Where to save the instruct tokenizer.
+        chat_template_file: Path to a Jinja file to use as the chat template
+            instead of loading one from instruct_tokenizer_path. Exactly one
+            of the two sources must be provided.
 
     Returns:
         (tokenizer, stats) tuple.
     """
+    if (instruct_tokenizer_path is None) == (chat_template_file is None):
+        raise ValueError(
+            "Provide exactly one of instruct_tokenizer_path or chat_template_file."
+        )
     print("=" * 60)
     print("CREATING INSTRUCT OMNI-TOKENIZER")
     print("=" * 60)
@@ -163,12 +173,18 @@ def create_instruct_tokenizer(
     print(f"Detected modalities: {list(existing['modalities'].keys())}")
 
     # Load chat template
-    instruct_tokenizer = AutoTokenizer.from_pretrained(instruct_tokenizer_path)
-    chat_template = instruct_tokenizer.chat_template
-    if not chat_template:
-        raise ValueError(
-            f"No chat template found in {instruct_tokenizer_path}."
-        )
+    if chat_template_file is not None:
+        with open(chat_template_file, "r", encoding="utf-8") as f:
+            chat_template = f.read()
+        if not chat_template:
+            raise ValueError(f"Chat template file {chat_template_file} is empty.")
+    else:
+        instruct_tokenizer = AutoTokenizer.from_pretrained(instruct_tokenizer_path)
+        chat_template = instruct_tokenizer.chat_template
+        if not chat_template:
+            raise ValueError(
+                f"No chat template found in {instruct_tokenizer_path}."
+            )
 
     # Copy base to output
     if os.path.abspath(base_tokenizer_path) != os.path.abspath(output_path):
