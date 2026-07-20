@@ -61,6 +61,16 @@ create_instruct_tokenizer("./omni_vision_audio", "swiss-ai/Apertus-8B-2509-Instr
 
 `<image>` and `<|image|>` encode to the same token ID. Same for `<audio>` / `<|audio|>`. Handled by the tokenizer's normalizer -- no manual `.replace()` needed in data loaders.
 
+## Named special tokens
+
+Builds emit the HF named-attribute mapping into `tokenizer_config.json`'s `extra_special_tokens`
+(declared per modality in `omnitok/modalities.py`), so `transformers >= 4.47` exposes the media tokens
+as named tokenizer attributes: `tokenizer.image_token`, `boi_token`, `eoi_token`, `image_wrapper_token`,
+`eol_token`, `audio_token`, `boa_token`, `eoa_token` (plus `_id` twins). Processors and chat templates
+can resolve the tokens through these names instead of hardcoding strings.
+Version 4.47 is the minimum because earlier releases do not interpret the dictionary-valued
+`extra_special_tokens` mapping as named tokenizer attributes.
+
 ## Known codebook sizes
 
 | Tokenizer | Modality | Codebook Size |

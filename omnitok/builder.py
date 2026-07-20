@@ -20,7 +20,7 @@ from .io import (
     save_tokenizer,
     write_tokenizer_config,
 )
-from .modalities import MODALITY_REGISTRY, ModalityConfig
+from .modalities import MODALITY_REGISTRY, ModalityConfig, hf_extra_special_tokens
 
 
 def add_modality(
@@ -102,6 +102,7 @@ def add_modality(
             tokenizer,
             base_vocab_size,
             omnimodal_config=omnimodal_config,
+            extra_special_tokens=_named_special_tokens(omnimodal_config, tokenizer, mc),
         )
         if _is_apertus_1p5(tokenizer):
             mark_tokens_non_special(output_path)
@@ -185,6 +186,7 @@ def add_modality(
         extra_config=extra_config,
         config_section_name=mc.config_section_name,
         omnimodal_config=omnimodal_config,
+        extra_special_tokens=_named_special_tokens(omnimodal_config, tokenizer, mc),
     )
 
     # Keep the reasoning delimiters non-special so a reasoning parser can find
@@ -205,6 +207,36 @@ def add_modality(
 
 
 # ── Private helpers ──────────────────────────────────────────────────────────
+
+
+def _named_special_tokens(
+    omnimodal_config: dict[str, Any],
+    tokenizer,
+    mc: ModalityConfig,
+) -> dict[str, str]:
+    """HF named-token mapping for every known modality present in the tokenizer.
+
+    Modalities are resolved from the registry, with ``mc`` taking precedence
+    for its own name (a custom ModalityConfig drove the build, so its
+    ``hf_named_tokens`` is the ground truth for that modality). Every named
+    token must exist in the tokenizer's vocabulary: emitting a name for a
+    missing token would make transformers silently append it as a NEW vocab
+    entry on load, past the model's embedding range.
+    """
+    known = {**MODALITY_REGISTRY, mc.name: mc}
+    named = hf_extra_special_tokens(
+        known[m["name"]]
+        for m in omnimodal_config.get("modalities", [])
+        if m["name"] in known
+    )
+    vocab = tokenizer.get_vocab()
+    missing = {name: token for name, token in named.items() if token not in vocab}
+    if missing:
+        raise ValueError(
+            f"Named special tokens missing from the tokenizer vocabulary: {missing}. "
+            "The artifact predates the current modality definitions; rebuild it."
+        )
+    return named
 
 
 def _is_apertus_1p5(tokenizer) -> bool:

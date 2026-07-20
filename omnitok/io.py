@@ -303,6 +303,7 @@ def write_tokenizer_config(
     extra_config: dict[str, Any] | None = None,
     config_section_name: str | None = None,
     omnimodal_config: dict[str, Any] | None = None,
+    extra_special_tokens: dict[str, str] | None = None,
 ) -> None:
     """Write derived/custom fields into ``tokenizer_config.json``.
 
@@ -314,6 +315,9 @@ def write_tokenizer_config(
     - ``base_vocab_size`` and ``added_tokens_count`` are project-specific.
     - ``omnimodal_config`` is derived metadata the tokenizer object
       itself does not carry.
+    - ``extra_special_tokens`` (the HF named-attribute mapping, see
+      ``modalities.hf_extra_special_tokens``) is not registered on the live
+      tokenizer object by the build pipeline, so it must be merged here.
 
     This helper centralizes those post-save corrections in one place.
     """
@@ -334,6 +338,19 @@ def write_tokenizer_config(
             config["omnimodal_config"] = omnimodal_config
         else:
             config.pop("omnimodal_config", None)
+
+    if extra_special_tokens:
+        existing = config.get("extra_special_tokens")
+        if isinstance(existing, dict):
+            merged = {**existing, **extra_special_tokens}
+        else:
+            # Key absent, or newer transformers serialized the (huge) plain
+            # list of additional_special_tokens here (which crashes 4.47+
+            # loads). Either way the tokens stay special via tokenizer.json;
+            # this project's semantics for the key is the HF named-dict form.
+            merged = dict(extra_special_tokens)
+        # sorted like every other dict in this file, for deterministic builds
+        config["extra_special_tokens"] = dict(sorted(merged.items()))
 
     with open(config_path, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
