@@ -45,12 +45,14 @@ from transformers import AutoTokenizer
 from .modalities import MODALITY_REGISTRY, ModalityConfig
 
 
-def _resolve_tokenizer_path(tokenizer_path: str) -> str:
+def _resolve_tokenizer_path(tokenizer_path: str, revision: str | None = None) -> str:
     """Resolve a tokenizer path to a local directory.
 
     If ``tokenizer_path`` is already a local directory, returns it as-is.
     Otherwise treats it as a HuggingFace Hub model ID and downloads/resolves
-    it to the local cache.
+    it to the local cache. ``revision`` pins the Hub commit to fetch; Hub
+    repos are mutable, so reproducible builds should always pin one. It is
+    ignored for local directories.
 
     Returns:
         Absolute path to a local directory containing the tokenizer files.
@@ -62,7 +64,7 @@ def _resolve_tokenizer_path(tokenizer_path: str) -> str:
         return tokenizer_path
 
     try:
-        return snapshot_download(tokenizer_path)
+        return snapshot_download(tokenizer_path, revision=revision)
     except (HFValidationError, RepositoryNotFoundError, OSError) as e:
         raise FileNotFoundError(
             f"'{tokenizer_path}' is not a local directory and could not be "
@@ -123,6 +125,43 @@ def rename_reserved_token(
     print(f"  Renamed {old_token} -> {new_token} (ID {token_id})")
 
 
+def _flat_normalizer_chain(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the tokenizer state's normalizer as a flat list of rules.
+
+    The normalizer is rebuilt as a single flat Sequence from the tokenizer's
+    serialized state; nested Sequences lose their child rules on some
+    tokenizers versions.
+    """
+    existing = state.get("normalizer")
+    if existing is None:
+        return []
+    if existing["type"] == "Sequence":
+        return existing["normalizers"]
+    return [existing]
+
+
+def prepend_normalizer_rules(
+    save_path: str, rules: tuple[dict[str, Any], ...] | list[dict[str, Any]]
+) -> None:
+    """Insert normalizer ``rules`` at the front of the chain, first rule first.
+
+    Unlike :func:`add_token_alias`, this takes raw serialized rule dicts
+    (e.g. ``{"type": "Replace", "pattern": {"Regex": ...}, "content": ...}``),
+    so it can express Regex patterns and deletions whose replacement is not an
+    added token. Rules already present are not duplicated. Operates directly
+    on ``tokenizer.json`` and preserves the file's backend serialization.
+    """
+    tokenizer_json_path = os.path.join(save_path, "tokenizer.json")
+    state = json.loads(Tokenizer.from_file(tokenizer_json_path).to_str())
+    chain = _flat_normalizer_chain(state)
+    for rule in reversed(rules):
+        if rule not in chain:
+            chain.insert(0, rule)
+    state["normalizer"] = {"type": "Sequence", "normalizers": chain}
+    Tokenizer.from_str(json.dumps(state)).save(tokenizer_json_path, pretty=True)
+    print(f"  Prepended {len(rules)} normalizer rules")
+
+
 def add_token_alias(
     save_path: str,
     token: str,
@@ -162,13 +201,7 @@ def add_token_alias(
         raise ValueError(f"Alias target {token!r} is not an added token")
     target["normalized"] = True
 
-    existing = state.get("normalizer")
-    if existing is None:
-        chain = []
-    elif existing["type"] == "Sequence":
-        chain = existing["normalizers"]
-    else:
-        chain = [existing]
+    chain = _flat_normalizer_chain(state)
     rule = {"type": "Replace", "pattern": {"String": alias}, "content": token}
     if rule not in chain:
         chain.insert(0, rule)

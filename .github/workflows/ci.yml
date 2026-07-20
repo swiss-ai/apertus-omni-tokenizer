@@ -46,6 +46,21 @@ jobs:
       - name: Run tokenizer tests
         run: pytest tests/test_tokenizers.py -v
 
+  reproduction:
+    name: Rebuild Apertus 1.5 from Apertus 1 (byte-identical)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install -e ".[dev]"
+
+      - name: Build 1.5 from the checked-in base and compare to the manifest
+        run: pytest tests/test_apertus_recipe.py -v
+
   checksum-manifests:
     name: Checksum manifests up to date
     runs-on: ubuntu-latest
