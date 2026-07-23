@@ -12,7 +12,6 @@
     "codebook_size": 4096,
     "type": "wavtokenizer"
   },
-  "backend": "tokenizers",
   "base_vocab_size": 131072,
   "boa_token": "<|audio_start|>",
   "boi_token": "<|img_start|>",
@@ -34,8 +33,6 @@
   },
   "image_token": "<|image|>",
   "image_wrapper_token": "<|img_token_start|>",
-  "is_local": true,
-  "local_files_only": false,
   "model_input_names": [
     "input_ids",
     "attention_mask"
@@ -72,7 +69,7 @@
   "sft_user_begin_sequence": [
     65
   ],
-  "tokenizer_class": "TokenizersBackend",
+  "tokenizer_class": "PreTrainedTokenizerFast",
   "unk_token": "<unk>",
   "vision_begin_token": [
     131073
