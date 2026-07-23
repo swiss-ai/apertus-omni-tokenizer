@@ -1,9 +1,11 @@
-"""The Apertus 1.5 build recipe reproduces the canonical artifact.
+"""The Apertus 1.5 build recipe reproduces the shipped artifact.
 
 The whole point of this repo: running `build_apertus_1p5` on the Apertus 1
-base yields the canonical Apertus 1.5 tokenizer (apertus-ai/Apertus-v1.5-8B-RC)
-byte-for-byte, as pinned by the md5 manifest under validation/. The build runs
-offline from the checked-in copy of the base under tokenizers/Apertus_1.
+base yields the shipped Apertus 1.5 tokenizer — the canonical artifact
+(apertus-ai/Apertus-v1.5-8B-RC) plus the deliberate fixes documented in
+omnitok/apertus.py — byte-for-byte, as pinned by the md5 manifest under
+validation/. The build runs offline from the checked-in copy of the base
+under tokenizers/Apertus_1.
 """
 
 import hashlib
