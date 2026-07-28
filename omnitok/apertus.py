@@ -119,6 +119,22 @@ REASONING_CLEANUP_RULES: tuple[dict[str, Any], ...] = (
     {"type": "Replace", "pattern": {"Regex": r"<\|inner_suffix\|>\s+"}, "content": "<|inner_suffix|>"},
 )
 
+
+def add_reasoning_aliases(save_path: str) -> None:
+    """Retrofit the canonical 1.5 reasoning rewrites onto an existing tokenizer.
+
+    Installs the same rules the build recipe does: <think>/</think> aliased to
+    the <|inner_prefix|>/<|inner_suffix|> delimiters (flipping the targets to
+    normalized=True), then the REASONING_CLEANUP_RULES prepended in front.
+    Idempotent; raises ValueError if a delimiter is not an added token.
+    """
+    tokenizer = AutoTokenizer.from_pretrained(save_path)
+    add_token_alias(save_path, "<|inner_suffix|>", "</think>",
+                    tokenizer=tokenizer, save=False)
+    add_token_alias(save_path, "<|inner_prefix|>", "<think>",
+                    tokenizer=tokenizer, save=True)
+    prepend_normalizer_rules(save_path, REASONING_CLEANUP_RULES)
+
 # Multimodal role tokens surfaced to the Apertus1p5Processor, both as the
 # extra_special_tokens dict and as their top-level config mirrors.
 EXTRA_SPECIAL_TOKENS = {

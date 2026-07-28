@@ -11,6 +11,7 @@ import pytest
 from tokenizers import Tokenizer, models, normalizers
 from transformers import AddedToken, AutoTokenizer, PreTrainedTokenizerFast
 
+from omnitok.apertus import add_reasoning_aliases
 from omnitok.io import add_token_alias
 
 
@@ -197,3 +198,71 @@ class TestAliasNormalizerChain:
         base = self._make_base(tmp_path, normalizers.NFC())
         with pytest.raises(ValueError, match="discard"):
             add_token_alias(base, "<|image|>", "<image>", save=False)
+
+
+class TestReasoningAliases:
+    """add_reasoning_aliases installs the canonical reasoning rewrites.
+    Synthetic bases -- no network, no build."""
+
+    @staticmethod
+    def _base(tmp_path):
+        backend = Tokenizer(models.WordLevel({"<unk>": 0, "hi": 1}, unk_token="<unk>"))
+        tok = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="<unk>")
+        tok.add_tokens(
+            [
+                AddedToken("<|inner_prefix|>", special=False, normalized=False),
+                AddedToken("<|inner_suffix|>", special=False, normalized=False),
+            ]
+        )
+        out = str(tmp_path / "base")
+        tok.save_pretrained(out)
+        return out
+
+    def test_all_spellings_resolve_to_delimiters(self, tmp_path):
+        base = self._base(tmp_path)
+        add_reasoning_aliases(base)
+        tok = AutoTokenizer.from_pretrained(base)
+        prefix = tok.convert_tokens_to_ids("<|inner_prefix|>")
+        suffix = tok.convert_tokens_to_ids("<|inner_suffix|>")
+        for spelling, tid in (
+            ("<think>", prefix), ("<thought>", prefix),
+            ("</think>", suffix), ("</thought>", suffix), ("<channel|>", suffix),
+        ):
+            assert tok.encode(spelling, add_special_tokens=False) == [tid], spelling
+        assert tok.encode("<|channel|>thought\n", add_special_tokens=False) == [prefix]
+
+    def test_answer_wrappers_are_stripped(self, tmp_path):
+        base = self._base(tmp_path)
+        add_reasoning_aliases(base)
+        tok = AutoTokenizer.from_pretrained(base)
+        assert tok.encode("<answer>hi</answer>", add_special_tokens=False) == tok.encode(
+            "hi", add_special_tokens=False
+        )
+
+    def test_whitespace_after_suffix_collapses(self, tmp_path):
+        base = self._base(tmp_path)
+        add_reasoning_aliases(base)
+        tok = AutoTokenizer.from_pretrained(base)
+        assert tok.encode("<|inner_suffix|>   hi", add_special_tokens=False) == tok.encode(
+            "<|inner_suffix|>hi", add_special_tokens=False
+        )
+
+    def test_targets_flipped_and_idempotent(self, tmp_path):
+        base = self._base(tmp_path)
+        add_reasoning_aliases(base)
+        with open(f"{base}/tokenizer.json") as f:
+            tj = json.load(f)
+        flags = {t["content"]: t["normalized"] for t in tj["added_tokens"]}
+        assert flags["<|inner_prefix|>"] is True and flags["<|inner_suffix|>"] is True
+        n_rules = len(tj["normalizer"]["normalizers"])
+        add_reasoning_aliases(base)
+        with open(f"{base}/tokenizer.json") as f:
+            assert len(json.load(f)["normalizer"]["normalizers"]) == n_rules
+
+    def test_missing_delimiter_raises(self, tmp_path):
+        backend = Tokenizer(models.WordLevel({"<unk>": 0}, unk_token="<unk>"))
+        tok = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="<unk>")
+        out = str(tmp_path / "bare")
+        tok.save_pretrained(out)
+        with pytest.raises(ValueError, match="not an added token"):
+            add_reasoning_aliases(out)
