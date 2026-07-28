@@ -1,9 +1,9 @@
 """Build recipe for the Apertus 1.5 tokenizer.
 
-Reproduces the canonical Apertus 1.5 tokenizer (apertus-ai/Apertus-v1.5-8B-RC)
-byte-for-byte from the Apertus 1 instruct tokenizer
-(swiss-ai/Apertus-8B-Instruct-2509). The recipe is the audit trail for every
-delta between the two:
+Reproduces the canonical Apertus 1.5 tokenizer (tokenizers/Apertus_1p5, as
+pinned by validation/Apertus_1p5.md5) byte-for-byte from the Apertus 1
+instruct tokenizer (swiss-ai/Apertus-8B-Instruct-2509). The recipe is the
+audit trail for every delta between the two:
 
 1. Text stage (`prepare_apertus_1p5_text_base`):
    - ``<think>``/``</think>`` (ids 32/33) swap names with
@@ -22,22 +22,28 @@ delta between the two:
    chat_templates/Apertus_1p5/chat_template.jinja) plus SFT begin/end
    sequences.
 5. Finalize (`_finalize_apertus_1p5`): prepends the reasoning-trace cleanup
-   normalizer rules, applies canonical quirks (see below), and writes
-   tokenizer_config.json / special_tokens_map.json / chat_template.jinja with
-   a deterministic serialization so the output does not depend on which
-   transformers version performed the build.
+   normalizer rules and writes tokenizer_config.json /
+   special_tokens_map.json / chat_template.jinja with a deterministic
+   serialization so the output does not depend on which transformers version
+   performed the build.
 
-Known canonical quirks, reproduced on purpose (changing any of them means
-shipping a new tokenizer release, not a rebuild):
+The canonical artifact deliberately repairs three defects of the originally
+released RC (apertus-ai/Apertus-v1.5-8B-RC); the recipe builds the repaired
+form:
 
-- ``<|audio|>`` (131085) has ``normalized: false``, so the ``<audio>`` alias
-  rule in the normalizer never matches an intact special token: ``<audio>``
-  encodes as plain text, NOT as 131085. The ``<image>`` alias works
-  (``<|image|>`` is ``normalized: true``).
-- ``tokenizer_config.json`` says ``vocab_size: 131072`` — the base text vocab,
-  not the true total of 266,440 (use ``len(tokenizer)`` for the total).
-- ``backend: "tokenizers"`` / ``is_local: true`` are fossils of the
-  environment that produced the original artifact.
+- ``<|audio|>`` (131085) is ``normalized: true``, so the ``<audio>`` alias
+  rule matches just like ``<image>`` does. (The RC shipped it false, leaving
+  bare ``<audio>`` to encode as plain text.)
+- ``eos_token`` is ``</s>`` (id 2), the sequence terminator; the turn/tool
+  stop tokens live in generation_config, not here. (The RC inherited
+  ``<|assistant_end|>`` from the Apertus 1 base.)
+- ``tokenizer_config.json`` is the slim shape adopted from the aligned
+  integration repos: no ``added_tokens_decoder`` mirror, no
+  ``backend``/``is_local`` fossils, and the multimodal role tokens exposed
+  via ``extra_special_tokens`` for the Apertus1p5Processor.
+
+One canonical quirk is reproduced as-is: ``vocab_size: 131072`` is the base
+text vocab, not the true total of 266,440 (use ``len(tokenizer)``).
 """
 
 from __future__ import annotations
@@ -113,22 +119,35 @@ REASONING_CLEANUP_RULES: tuple[dict[str, Any], ...] = (
     {"type": "Replace", "pattern": {"Regex": r"<\|inner_suffix\|>\s+"}, "content": "<|inner_suffix|>"},
 )
 
+# Multimodal role tokens surfaced to the Apertus1p5Processor, both as the
+# extra_special_tokens dict and as their top-level config mirrors.
+EXTRA_SPECIAL_TOKENS = {
+    "audio_token": "<|audio|>",
+    "boa_token": "<|audio_start|>",
+    "boi_token": "<|img_start|>",
+    "eoa_token": "<|audio_end|>",
+    "eoi_token": "<|img_end|>",
+    "eol_token": "<|img_end_of_row|>",
+    "image_token": "<|image|>",
+    "image_wrapper_token": "<|img_token_start|>",
+}
+
 # The exact key set of the canonical tokenizer_config.json; the finalizer
 # asserts it so a pipeline change cannot silently alter the artifact schema.
 CANONICAL_CONFIG_KEYS = frozenset({
-    "add_prefix_space", "added_tokens_count", "added_tokens_decoder",
-    "audio_begin_token", "audio_end_token", "audio_tokenizer", "backend",
-    "base_vocab_size", "bos_token", "clean_up_tokenization_spaces",
-    "eos_token", "extra_special_tokens", "is_local", "model_input_names",
-    "model_max_length", "omnimodal_config", "pad_token", "padding_side",
-    "sft_assistant_begin_sequence", "sft_eot_token",
-    "sft_user_begin_sequence", "tokenizer_class", "unk_token",
-    "vision_begin_token", "vision_end_token", "vision_tokenizer",
-    "vocab_size",
+    "add_prefix_space", "added_tokens_count", "audio_begin_token",
+    "audio_end_token", "audio_token", "audio_tokenizer", "base_vocab_size",
+    "boa_token", "boi_token", "bos_token", "clean_up_tokenization_spaces",
+    "eoa_token", "eoi_token", "eol_token", "eos_token",
+    "extra_special_tokens", "image_token", "image_wrapper_token",
+    "model_input_names", "model_max_length", "omnimodal_config", "pad_token",
+    "padding_side", "processor_class", "sft_assistant_begin_sequence",
+    "sft_eot_token", "sft_user_begin_sequence", "tokenizer_class",
+    "unk_token", "vision_begin_token", "vision_end_token",
+    "vision_tokenizer", "vocab_size",
 })
 
-# Post-build encode pins: literal -> single expected id. <audio> is absent on
-# purpose (broken alias, see module docstring).
+# Post-build encode pins: literal -> single expected id.
 _VERIFY_ENCODINGS = {
     "<think>": 32,
     "</think>": 33,
@@ -142,6 +161,7 @@ _VERIFY_ENCODINGS = {
     "<image>": 131079,
     "<|audio_start|>": 131080,
     "<|audio|>": 131085,
+    "<audio>": 131085,
     "<|visual token 0|>": 131272,
     "<|audio token 0|>": 262344,
 }
@@ -260,21 +280,19 @@ def prepare_apertus_1p5_text_base(
 
 
 def _finalize_apertus_1p5(output_path: str) -> None:
-    """Apply canonical quirks and write the derived files deterministically."""
+    """Write the derived files in their canonical, deterministic form."""
     state = _load_backend_state(output_path)
 
     # The original artifact swapped the names of audio slots 13/14 by string
-    # replacement, so the alias-ready normalized=true flag stayed behind at
-    # slot 14 while the <|audio|> name moved to slot 13 without it. That is
-    # what breaks the <audio> alias (see module docstring). Reproduced as-is.
+    # replacement, leaving the alias-ready normalized=true flag behind at
+    # slot 14 (<|stt_translate|>). The stray flag is harmless and kept as-is;
+    # the <|audio|> side of the swap was repaired in the canonical artifact
+    # (see module docstring), and the pipeline already builds it repaired.
     for entry in state["added_tokens"]:
-        if entry["content"] == "<|audio|>":
-            entry["normalized"] = False
-        elif entry["content"] == "<|stt_translate|>":
+        if entry["content"] == "<|stt_translate|>":
             entry["normalized"] = True
     _save_backend_state(state, output_path)
     prepend_normalizer_rules(output_path, REASONING_CLEANUP_RULES)
-    state = _load_backend_state(output_path)
 
     config_path = os.path.join(output_path, "tokenizer_config.json")
     with open(config_path, "r", encoding="utf-8") as f:
@@ -290,33 +308,24 @@ def _finalize_apertus_1p5(output_path: str) -> None:
     carried_keys = (
         "add_prefix_space", "added_tokens_count", "audio_begin_token",
         "audio_end_token", "audio_tokenizer", "base_vocab_size", "bos_token",
-        "clean_up_tokenization_spaces", "eos_token", "model_input_names",
+        "clean_up_tokenization_spaces", "model_input_names",
         "model_max_length", "omnimodal_config", "pad_token", "padding_side",
         "sft_assistant_begin_sequence", "sft_eot_token",
         "sft_user_begin_sequence", "unk_token", "vision_begin_token",
         "vision_end_token", "vision_tokenizer",
     )
     config = {key: built[key] for key in carried_keys}
+    config.update(EXTRA_SPECIAL_TOKENS)
     config.update({
-        "backend": "tokenizers",
-        "is_local": True,
+        # The base stops on <|assistant_end|>; 1.5 ends sequences with the
+        # plain </s> terminator and keeps the turn/tool stops in
+        # generation_config.
+        "eos_token": "</s>",
+        "extra_special_tokens": dict(EXTRA_SPECIAL_TOKENS),
+        "processor_class": "Apertus1p5Processor",
         "tokenizer_class": "PreTrainedTokenizerFast",
-        "extra_special_tokens": {},
         # Canonical quirk: the base text vocab size, not the true total.
         "vocab_size": BASE_VOCAB_SIZE,
-        # Int keys on purpose: json sorts them numerically ("2" before "10"),
-        # matching how transformers serializes added_tokens_decoder.
-        "added_tokens_decoder": {
-            t["id"]: {
-                "content": t["content"],
-                "lstrip": t["lstrip"],
-                "normalized": t["normalized"],
-                "rstrip": t["rstrip"],
-                "single_word": t["single_word"],
-                "special": t["special"],
-            }
-            for t in state["added_tokens"]
-        },
     })
     if set(config) != CANONICAL_CONFIG_KEYS:
         raise ValueError(
@@ -350,6 +359,10 @@ def _verify_apertus_1p5(output_path: str) -> None:
         raise ValueError(
             f"Built tokenizer has {len(tokenizer)} tokens, "
             f"expected {FINAL_VOCAB_SIZE}"
+        )
+    if tokenizer.eos_token != "</s>":
+        raise ValueError(
+            f"eos_token is {tokenizer.eos_token!r}, expected '</s>'"
         )
     for literal, token_id in _VERIFY_ENCODINGS.items():
         ids = tokenizer.encode(literal, add_special_tokens=False)

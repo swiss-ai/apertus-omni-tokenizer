@@ -16,7 +16,7 @@ def main() -> None:
         prog="omni-tokenizer",
         description=(
             "Build the canonical Apertus 1.5 tokenizer "
-            "(apertus-ai/Apertus-v1.5-8B-RC) from the Apertus 1 base."
+            "(tokenizers/Apertus_1p5) from the Apertus 1 base."
         ),
     )
     parser.add_argument(

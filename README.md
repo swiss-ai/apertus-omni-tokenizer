@@ -1,8 +1,8 @@
 # omnitok
 
-This repo builds the Apertus 1.5 tokenizer
-([apertus-ai/Apertus-v1.5-8B-RC](https://huggingface.co/apertus-ai/Apertus-v1.5-8B-RC))
-from the Apertus 1 base
+This repo builds the canonical Apertus 1.5 tokenizer (`tokenizers/Apertus_1p5`,
+the reference for the [apertus-ai/Apertus-v1.5-8B](https://huggingface.co/apertus-ai/Apertus-v1.5-8B)
+release) from the Apertus 1 base
 ([swiss-ai/Apertus-8B-Instruct-2509](https://huggingface.co/swiss-ai/Apertus-8B-Instruct-2509)),
 and documents the chat templates and canonical tokenizer files for both releases.
 
@@ -30,7 +30,8 @@ rebuilds and checks this). The full recipe — reasoning-delimiter renames, tool
 output tokens, normalizer alias/cleanup rules, vision + audio modalities, chat
 template, SFT sequences — is encoded in `omnitok/apertus.py`; that module's
 docstring is the audit trail of every delta between Apertus 1 and 1.5,
-including the canonical quirks that are reproduced on purpose. Do not hand-edit
+including the deliberate repairs over the originally released RC artifact.
+Do not hand-edit
 tokenizer files: change the recipe (or the chat template under
 `chat_templates/Apertus_1p5/`) and rebuild.
 
@@ -57,16 +58,15 @@ tokenizer files: change the recipe (or the chat template under
 
 ## Token aliases
 
-`<image>` and `<|image|>` encode to the same token ID, handled by the
-tokenizer's normalizer -- no manual `.replace()` needed in data loaders.
-`<think>`/`</think>` are likewise aliased to `<|inner_prefix|>`/`<|inner_suffix|>`
-(ids 32/33).
+`<image>`/`<|image|>` and `<audio>`/`<|audio|>` each encode to the same token
+ID, handled by the tokenizer's normalizer -- no manual `.replace()` needed in
+data loaders. `<think>`/`</think>` are likewise aliased to
+`<|inner_prefix|>`/`<|inner_suffix|>` (ids 32/33).
 
-Known canonical quirk: the `<audio>` -> `<|audio|>` alias rule exists in the
-normalizer but does **not** work in the shipped 1.5 artifact (`<|audio|>` was
-left `normalized: false`, so `<audio>` encodes as plain text). The build
-reproduces this as-is; fixing it means shipping a new tokenizer release. Use
-the literal `<|audio|>` in data.
+(The originally released RC artifact shipped the `<audio>` alias broken:
+`<|audio|>` was left `normalized: false`, so bare `<audio>` encoded as plain
+text. The canonical artifact repairs this, and the build produces the
+repaired form.)
 
 ## Known codebook sizes
 
