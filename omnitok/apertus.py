@@ -1,9 +1,9 @@
 """Build recipe for the Apertus 1.5 tokenizer.
 
 Reproduces the canonical Apertus 1.5 tokenizer (tokenizers/Apertus_1p5, as
-pinned by validation/Apertus_1p5.md5) byte-for-byte from the Apertus 1
-instruct tokenizer (swiss-ai/Apertus-8B-Instruct-2509). The recipe is the
-audit trail for every delta between the two:
+pinned by validation/Apertus_1p5.md5) byte-for-byte from the Apertus 1 base
+(swiss-ai/Apertus-8B-2509). The recipe is the audit trail for every delta
+between the two:
 
 1. Text stage (`prepare_apertus_1p5_text_base`):
    - ``<think>``/``</think>`` (ids 32/33) swap names with
@@ -67,15 +67,15 @@ from .io import (
     prepend_normalizer_rules,
 )
 
-BASE_REPO = "swiss-ai/Apertus-8B-Instruct-2509"
-# Hub repos are mutable (this one had <SPECIAL_73> renamed to <|image|> and
-# reverted after release), so the base is pinned to the post-revert commit.
-BASE_REVISION = "b946d40447b2b597999b9c86d44bee0b452c919f"
-# The build is parent-agnostic between the two Apertus 1 repos: the base
-# (swiss-ai/Apertus-8B-2509 @ 3162c99675aa588097cecd4a24b9aa1f712af477)
-# reproduces the same bytes, verified 2026-07-29. The instruct repo is the
-# default because its checked-in mirror (tokenizers/Apertus_1) doubles as
-# the offline build source and the validate_model.sh baseline.
+BASE_REPO = "swiss-ai/Apertus-8B-2509"
+# Hub repos are mutable (the sibling instruct repo had <SPECIAL_73> renamed
+# to <|image|> and reverted after release), so the base is pinned.
+BASE_REVISION = "3162c99675aa588097cecd4a24b9aa1f712af477"
+# The build is parent-agnostic between the two Apertus 1 repos: the instruct
+# tokenizer (swiss-ai/Apertus-8B-Instruct-2509 @
+# b946d40447b2b597999b9c86d44bee0b452c919f) reproduces the same bytes,
+# verified 2026-07-29. Its checked-in mirror (tokenizers/Apertus_1) is the
+# offline build source and the validate_model.sh baseline.
 
 BASE_VOCAB_SIZE = 131072
 VISION_VOCAB_SIZE = 131072
@@ -202,7 +202,7 @@ def prepare_apertus_1p5_text_base(
     *,
     revision: str | None = None,
 ) -> str:
-    """Turn the Apertus 1 instruct tokenizer into the 1.5 text tokenizer.
+    """Turn the Apertus 1 tokenizer into the 1.5 text tokenizer.
 
     Applies the base-vocab renames, demotes ids 69/70 to plain vocab entries,
     aliases the <think>/</think> literals to the reasoning delimiters at
@@ -383,7 +383,7 @@ def build_apertus_1p5(
 
     Args:
         output_path: Where to write the final tokenizer.
-        base_tokenizer_path: The Apertus 1 instruct tokenizer (local dir or
+        base_tokenizer_path: The Apertus 1 tokenizer (local dir or
             Hub ID). Defaults to the pinned canonical base.
         revision: Hub commit for base_tokenizer_path; ignored for local dirs.
         chat_template_file: The Apertus 1.5 chat template. Defaults to

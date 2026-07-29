@@ -3,7 +3,7 @@
 This repo builds the canonical Apertus 1.5 tokenizer (`tokenizers/Apertus_1p5`,
 the reference for the [apertus-ai/Apertus-v1.5-8B](https://huggingface.co/apertus-ai/Apertus-v1.5-8B)
 release) from the Apertus 1 base
-([swiss-ai/Apertus-8B-Instruct-2509](https://huggingface.co/swiss-ai/Apertus-8B-Instruct-2509)),
+([swiss-ai/Apertus-8B-2509](https://huggingface.co/swiss-ai/Apertus-8B-2509)),
 and documents the chat templates and canonical tokenizer files for both releases.
 
 ## Building the Apertus 1.5 tokenizer

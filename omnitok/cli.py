@@ -25,7 +25,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--base-tokenizer", default=BASE_REPO,
-        help=f"Apertus 1 instruct tokenizer (path or HF ID, default: {BASE_REPO}).",
+        help=f"Apertus 1 tokenizer (path or HF ID, default: {BASE_REPO}).",
     )
     parser.add_argument(
         "--revision", default=BASE_REVISION,
