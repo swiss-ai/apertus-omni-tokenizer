@@ -79,14 +79,28 @@ def _resolve_tokenizer_path(tokenizer_path: str, revision: str | None = None) ->
 # ── Token manipulation ───────────────────────────────────────────────────────
 
 
+def _rewrite_backend_state(save_path: str, mutate) -> None:
+    """Round-trip tokenizer.json through the backend, applying ``mutate``.
+
+    The state dict is parsed back by the backend on save, so a malformed
+    edit raises instead of writing a corrupt file, and the serialization
+    stays identical to what the backend itself writes.
+    """
+    path = os.path.join(save_path, "tokenizer.json")
+    state = json.loads(Tokenizer.from_file(path).to_str())
+    mutate(state)
+    Tokenizer.from_str(json.dumps(state)).save(path, pretty=True)
+
+
 def rename_reserved_tokens(
     save_path: str, tokenizer, renames: dict[str, str]
 ) -> None:
-    """Rename tokens in the saved tokenizer files on disk, one rewrite per file.
+    """Rename tokens in the saved tokenizer files on disk; ids never move.
 
-    Matches whole tokens only: quoted occurrences in tokenizer.json and
-    exactly-equal string values in tokenizer_config.json; ids never move.
-    Old tokens missing from the vocabulary are skipped.
+    tokenizer.json is rewritten structurally (vocab keys and added-token
+    contents); the tokenizer_config.json and special_tokens_map.json mirrors
+    swap exactly-equal string values. Old tokens missing from the vocabulary
+    are skipped.
 
     Used to turn placeholders like <|RESERVED_OMNI_001|> into real names
     like <|img_start|>.
@@ -110,32 +124,33 @@ def rename_reserved_tokens(
     if not present:
         return
 
-    tokenizer_json_path = os.path.join(save_path, "tokenizer.json")
-    if os.path.exists(tokenizer_json_path):
-        with open(tokenizer_json_path, "r", encoding="utf-8") as f:
-            content = f.read()
+    def _rename(state):
+        vocab = state["model"]["vocab"]
         for old, new in present.items():
-            content = content.replace(f'"{old}"', f'"{new}"')
-        with open(tokenizer_json_path, "w", encoding="utf-8") as f:
-            f.write(content)
+            if old in vocab:
+                vocab[new] = vocab.pop(old)
+        for entry in state["added_tokens"]:
+            if entry["content"] in present:
+                entry["content"] = present[entry["content"]]
 
-    config_path = os.path.join(save_path, "tokenizer_config.json")
-    if os.path.exists(config_path):
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
+    _rewrite_backend_state(save_path, _rename)
 
-        def _replace(obj):
-            if isinstance(obj, dict):
-                return {k: _replace(v) for k, v in obj.items()}
-            elif isinstance(obj, list):
-                return [_replace(item) for item in obj]
-            elif isinstance(obj, str):
-                return present.get(obj, obj)
-            return obj
+    def _replace(obj):
+        if isinstance(obj, dict):
+            return {k: _replace(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [_replace(item) for item in obj]
+        elif isinstance(obj, str):
+            return present.get(obj, obj)
+        return obj
 
-        config = _replace(config)
-        with open(config_path, "w", encoding="utf-8") as f:
-            f.write(json.dumps(config, indent=2))
+    for fname in ("tokenizer_config.json", "special_tokens_map.json"):
+        mirror_path = os.path.join(save_path, fname)
+        if os.path.exists(mirror_path):
+            with open(mirror_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            with open(mirror_path, "w", encoding="utf-8") as f:
+                f.write(json.dumps(_replace(data), indent=2))
 
     for old, new in present.items():
         token_id = tokenizer.backend_tokenizer.token_to_id(old)
@@ -168,14 +183,14 @@ def prepend_normalizer_rules(
     added token. Rules already present are not duplicated. Operates directly
     on ``tokenizer.json`` and preserves the file's backend serialization.
     """
-    tokenizer_json_path = os.path.join(save_path, "tokenizer.json")
-    state = json.loads(Tokenizer.from_file(tokenizer_json_path).to_str())
-    chain = _flat_normalizer_chain(state)
-    for rule in reversed(rules):
-        if rule not in chain:
-            chain.insert(0, rule)
-    state["normalizer"] = {"type": "Sequence", "normalizers": chain}
-    Tokenizer.from_str(json.dumps(state)).save(tokenizer_json_path, pretty=True)
+    def _prepend(state):
+        chain = _flat_normalizer_chain(state)
+        for rule in reversed(rules):
+            if rule not in chain:
+                chain.insert(0, rule)
+        state["normalizer"] = {"type": "Sequence", "normalizers": chain}
+
+    _rewrite_backend_state(save_path, _prepend)
     print(f"  Prepended {len(rules)} normalizer rules")
 
 

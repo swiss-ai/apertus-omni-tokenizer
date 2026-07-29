@@ -377,6 +377,18 @@ class TestRenameReservedTokens:
             config = json.load(f)
         assert config["probe"] == "<|img_start|>"
 
+    def test_special_tokens_map_is_renamed(self, tmp_path):
+        tok, path = self._saved(tmp_path, ["<A>"])
+        stm_path = os.path.join(path, "special_tokens_map.json")
+        with open(stm_path, "w") as f:
+            json.dump({"additional_special_tokens": ["<A>"]}, f)
+
+        rename_reserved_tokens(path, tok, {"<A>": "<|img_start|>"})
+
+        with open(stm_path) as f:
+            stm = json.load(f)
+        assert stm["additional_special_tokens"] == ["<|img_start|>"]
+
     def test_all_absent_leaves_files_byte_identical(self, tmp_path):
         tok, path = self._saved(tmp_path, ["<A>"])
         before = {
