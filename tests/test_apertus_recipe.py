@@ -37,10 +37,11 @@ def test_build_matches_canonical_manifest(built_1p5):
         manifest[name] = digest
     assert manifest, "empty manifest"
 
+    built = {name: _md5(built_1p5 / name) for name in manifest}
     mismatches = {
-        name: (_md5(built_1p5 / name), digest)
+        name: (built[name], digest)
         for name, digest in manifest.items()
-        if _md5(built_1p5 / name) != digest
+        if built[name] != digest
     }
     assert not mismatches, (
         f"Built files diverge from the canonical Apertus 1.5: {mismatches}"

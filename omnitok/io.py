@@ -35,7 +35,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from typing import Any
+from typing import Any, Callable, Sequence
 
 from huggingface_hub import snapshot_download
 from huggingface_hub.utils import HFValidationError, RepositoryNotFoundError
@@ -79,7 +79,9 @@ def _resolve_tokenizer_path(tokenizer_path: str, revision: str | None = None) ->
 # ── Token manipulation ───────────────────────────────────────────────────────
 
 
-def _rewrite_backend_state(save_path: str, mutate) -> None:
+def _rewrite_backend_state(
+    save_path: str, mutate: Callable[[dict[str, Any]], None]
+) -> None:
     """Round-trip tokenizer.json through the backend, applying ``mutate``.
 
     The state dict is parsed back by the backend on save, so a malformed
@@ -114,13 +116,16 @@ def rename_reserved_tokens(
     if len(set(targets)) != len(targets):
         raise ValueError("duplicate rename targets")
     present = {}
+    token_ids = {}
     for old, new in renames.items():
-        if tokenizer.backend_tokenizer.token_to_id(old) is None:
+        token_id = tokenizer.backend_tokenizer.token_to_id(old)
+        if token_id is None:
             print(f"  {old} not found, skipping rename to {new}")
             continue
         if tokenizer.backend_tokenizer.token_to_id(new) is not None:
             raise ValueError(f"rename target {new} already in the vocabulary")
         present[old] = new
+        token_ids[old] = token_id
     if not present:
         return
 
@@ -153,8 +158,7 @@ def rename_reserved_tokens(
                 f.write(json.dumps(_replace(data), indent=2))
 
     for old, new in present.items():
-        token_id = tokenizer.backend_tokenizer.token_to_id(old)
-        print(f"  Renamed {old} -> {new} (ID {token_id})")
+        print(f"  Renamed {old} -> {new} (ID {token_ids[old]})")
 
 
 def _flat_normalizer_chain(state: dict[str, Any]) -> list[dict[str, Any]]:
@@ -172,8 +176,18 @@ def _flat_normalizer_chain(state: dict[str, Any]) -> list[dict[str, Any]]:
     return [existing]
 
 
+def _prepend_rules(state: dict[str, Any], rules: Sequence[dict[str, Any]]) -> None:
+    """Insert ``rules`` at the front of the state's normalizer chain, first
+    rule first; rules already present are not duplicated."""
+    chain = _flat_normalizer_chain(state)
+    for rule in reversed(rules):
+        if rule not in chain:
+            chain.insert(0, rule)
+    state["normalizer"] = {"type": "Sequence", "normalizers": chain}
+
+
 def prepend_normalizer_rules(
-    save_path: str, rules: tuple[dict[str, Any], ...] | list[dict[str, Any]]
+    save_path: str, rules: Sequence[dict[str, Any]]
 ) -> None:
     """Insert normalizer ``rules`` at the front of the chain, first rule first.
 
@@ -181,16 +195,9 @@ def prepend_normalizer_rules(
     (e.g. ``{"type": "Replace", "pattern": {"Regex": ...}, "content": ...}``),
     so it can express Regex patterns and deletions whose replacement is not an
     added token. Rules already present are not duplicated. Operates directly
-    on ``tokenizer.json`` and preserves the file's backend serialization.
+    on ``tokenizer.json``.
     """
-    def _prepend(state):
-        chain = _flat_normalizer_chain(state)
-        for rule in reversed(rules):
-            if rule not in chain:
-                chain.insert(0, rule)
-        state["normalizer"] = {"type": "Sequence", "normalizers": chain}
-
-    _rewrite_backend_state(save_path, _prepend)
+    _rewrite_backend_state(save_path, lambda state: _prepend_rules(state, rules))
     print(f"  Prepended {len(rules)} normalizer rules")
 
 

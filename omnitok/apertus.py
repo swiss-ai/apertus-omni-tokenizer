@@ -54,14 +54,14 @@ import shutil
 import tempfile
 from typing import Any
 
-from tokenizers import Tokenizer
 from transformers import AutoTokenizer
 
 from .builder import add_modality
 from .instruct import create_instruct_tokenizer
 from .io import (
-    _flat_normalizer_chain,
+    _prepend_rules,
     _resolve_tokenizer_path,
+    _rewrite_backend_state,
     add_token_alias,
     mark_tokens_non_special,
     prepend_normalizer_rules,
@@ -120,21 +120,6 @@ REASONING_CLEANUP_RULES: tuple[dict[str, Any], ...] = (
 )
 
 
-def add_reasoning_aliases(save_path: str) -> None:
-    """Retrofit the canonical 1.5 reasoning rewrites onto an existing tokenizer.
-
-    Installs the same rules the build recipe does: <think>/</think> aliased to
-    the <|inner_prefix|>/<|inner_suffix|> delimiters (flipping the targets to
-    normalized=True), then the REASONING_CLEANUP_RULES prepended in front.
-    Idempotent; raises ValueError if a delimiter is not an added token.
-    """
-    tokenizer = AutoTokenizer.from_pretrained(save_path)
-    add_token_alias(save_path, "<|inner_suffix|>", "</think>",
-                    tokenizer=tokenizer, save=False)
-    add_token_alias(save_path, "<|inner_prefix|>", "<think>",
-                    tokenizer=tokenizer, save=True)
-    prepend_normalizer_rules(save_path, REASONING_CLEANUP_RULES)
-
 # Multimodal role tokens surfaced to the Apertus1p5Processor, both as the
 # extra_special_tokens dict and as their top-level config mirrors.
 EXTRA_SPECIAL_TOKENS = {
@@ -147,21 +132,6 @@ EXTRA_SPECIAL_TOKENS = {
     "image_token": "<|image|>",
     "image_wrapper_token": "<|img_token_start|>",
 }
-
-# The exact key set of the canonical tokenizer_config.json; the finalizer
-# asserts it so a pipeline change cannot silently alter the artifact schema.
-CANONICAL_CONFIG_KEYS = frozenset({
-    "add_prefix_space", "added_tokens_count", "audio_begin_token",
-    "audio_end_token", "audio_token", "audio_tokenizer", "base_vocab_size",
-    "boa_token", "boi_token", "bos_token", "clean_up_tokenization_spaces",
-    "eoa_token", "eoi_token", "eol_token", "eos_token",
-    "extra_special_tokens", "image_token", "image_wrapper_token",
-    "model_input_names", "model_max_length", "omnimodal_config", "pad_token",
-    "padding_side", "processor_class", "sft_assistant_begin_sequence",
-    "sft_eot_token", "sft_user_begin_sequence", "tokenizer_class",
-    "unk_token", "vision_begin_token", "vision_end_token",
-    "vision_tokenizer", "vocab_size",
-})
 
 # Post-build encode pins: literal -> single expected id.
 _VERIFY_ENCODINGS = {
@@ -190,22 +160,35 @@ def _default_chat_template_path() -> str:
     )
 
 
-def _load_backend_state(save_path: str) -> dict[str, Any]:
-    path = os.path.join(save_path, "tokenizer.json")
-    return json.loads(Tokenizer.from_file(path).to_str())
-
-
-def _save_backend_state(state: dict[str, Any], save_path: str) -> None:
-    # Round-tripping through the tokenizers backend keeps the serialization
-    # identical to what save_pretrained() writes.
-    path = os.path.join(save_path, "tokenizer.json")
-    Tokenizer.from_str(json.dumps(state)).save(path, pretty=True)
-
-
 def _dump_canonical_json(obj: dict[str, Any], path: str) -> None:
     """transformers-style deterministic JSON: sorted keys, indent 2, LF tail."""
     with open(path, "w", encoding="utf-8") as f:
         f.write(json.dumps(obj, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
+
+
+def _add_think_aliases(save_path: str) -> None:
+    """Alias the <think>/</think> literals to the delimiters at 32/33.
+
+    Insertion order gives the canonical chain [<think> -> 32, </think> -> 33];
+    add_token_alias flips both targets to normalized=True.
+    """
+    tokenizer = AutoTokenizer.from_pretrained(save_path)
+    add_token_alias(save_path, "<|inner_suffix|>", "</think>",
+                    tokenizer=tokenizer, save=False)
+    add_token_alias(save_path, "<|inner_prefix|>", "<think>",
+                    tokenizer=tokenizer, save=True)
+
+
+def add_reasoning_aliases(save_path: str) -> None:
+    """Retrofit the canonical 1.5 reasoning rewrites onto an existing tokenizer.
+
+    Installs the same rules the build recipe does: <think>/</think> aliased to
+    the <|inner_prefix|>/<|inner_suffix|> delimiters (flipping the targets to
+    normalized=True), then the REASONING_CLEANUP_RULES prepended in front.
+    Idempotent; raises ValueError if a delimiter is not an added token.
+    """
+    _add_think_aliases(save_path)
+    prepend_normalizer_rules(save_path, REASONING_CLEANUP_RULES)
 
 
 def prepare_apertus_1p5_text_base(
@@ -237,32 +220,33 @@ def prepare_apertus_1p5_text_base(
         if os.path.exists(fpath):
             shutil.copyfile(fpath, os.path.join(output_path, fname))
 
-    state = _load_backend_state(output_path)
+    def _apply_text_renames(state):
+        vocab = state["model"]["vocab"]
+        for token_id, (old, _) in TEXT_RENAMES.items():
+            if vocab.get(old) != token_id:
+                raise ValueError(
+                    f"Expected {old!r} at id {token_id} in the base vocab, "
+                    f"found id {vocab.get(old)!r}. {base_tokenizer_path} is "
+                    f"not the expected Apertus 1 base "
+                    f"({BASE_REPO} @ {BASE_REVISION})."
+                )
+        # Two phases: several renames swap names between ids, so setting new
+        # names while old ones are still present would clobber entries.
+        for _, (old, _) in TEXT_RENAMES.items():
+            del vocab[old]
+        for token_id, (_, new) in TEXT_RENAMES.items():
+            vocab[new] = token_id
 
-    vocab = state["model"]["vocab"]
-    for token_id, (old, _) in TEXT_RENAMES.items():
-        if vocab.get(old) != token_id:
-            raise ValueError(
-                f"Expected {old!r} at id {token_id} in the base vocab, found "
-                f"id {vocab.get(old)!r}. {base_tokenizer_path} is not the "
-                f"expected Apertus 1 base ({BASE_REPO} @ {BASE_REVISION})."
-            )
-    # Two phases: several renames swap names between ids, so setting new names
-    # while old ones are still present would clobber entries.
-    for _, (old, _) in TEXT_RENAMES.items():
-        del vocab[old]
-    for token_id, (_, new) in TEXT_RENAMES.items():
-        vocab[new] = token_id
+        added_by_id = {t["id"]: t for t in state["added_tokens"]}
+        for token_id, (old, new) in TEXT_RENAMES.items():
+            entry = added_by_id.get(token_id)
+            if entry is not None and entry["content"] == old:
+                entry["content"] = new
+        state["added_tokens"] = [
+            t for t in state["added_tokens"] if t["id"] not in DEMOTED_TOKEN_IDS
+        ]
 
-    added_by_id = {t["id"]: t for t in state["added_tokens"]}
-    for token_id, (old, new) in TEXT_RENAMES.items():
-        entry = added_by_id.get(token_id)
-        if entry is not None and entry["content"] == old:
-            entry["content"] = new
-    state["added_tokens"] = [
-        t for t in state["added_tokens"] if t["id"] not in DEMOTED_TOKEN_IDS
-    ]
-    _save_backend_state(state, output_path)
+    _rewrite_backend_state(output_path, _apply_text_renames)
     for token_id, (old, new) in TEXT_RENAMES.items():
         print(f"  Renamed id {token_id}: {old} -> {new}")
     print(f"  Demoted ids {DEMOTED_TOKEN_IDS} from added tokens")
@@ -283,32 +267,25 @@ def prepare_apertus_1p5_text_base(
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(config, f, indent=2)
 
-    # Alias the old literals to the new delimiters. Insertion order gives the
-    # canonical chain [<think> -> 32, </think> -> 33].
-    tokenizer = AutoTokenizer.from_pretrained(output_path)
-    add_token_alias(output_path, "<|inner_suffix|>", "</think>",
-                    tokenizer=tokenizer, save=False)
-    add_token_alias(output_path, "<|inner_prefix|>", "<think>",
-                    tokenizer=tokenizer, save=True)
-
+    _add_think_aliases(output_path)
     mark_tokens_non_special(output_path)
     return output_path
 
 
 def _finalize_apertus_1p5(output_path: str) -> None:
     """Write the derived files in their canonical, deterministic form."""
-    state = _load_backend_state(output_path)
-
     # The original artifact swapped the names of audio slots 13/14 by string
     # replacement, leaving the alias-ready normalized=true flag behind at
     # slot 14 (<|stt_translate|>). The stray flag is harmless and kept as-is;
     # the <|audio|> side of the swap was repaired in the canonical artifact
     # (see module docstring), and the pipeline already builds it repaired.
-    for entry in state["added_tokens"]:
-        if entry["content"] == "<|stt_translate|>":
-            entry["normalized"] = True
-    _save_backend_state(state, output_path)
-    prepend_normalizer_rules(output_path, REASONING_CLEANUP_RULES)
+    def _keep_stt_flag_and_prepend_rules(state):
+        for entry in state["added_tokens"]:
+            if entry["content"] == "<|stt_translate|>":
+                entry["normalized"] = True
+        _prepend_rules(state, REASONING_CLEANUP_RULES)
+
+    _rewrite_backend_state(output_path, _keep_stt_flag_and_prepend_rules)
 
     config_path = os.path.join(output_path, "tokenizer_config.json")
     with open(config_path, "r", encoding="utf-8") as f:
@@ -343,12 +320,6 @@ def _finalize_apertus_1p5(output_path: str) -> None:
         # Canonical quirk: the base text vocab size, not the true total.
         "vocab_size": BASE_VOCAB_SIZE,
     })
-    if set(config) != CANONICAL_CONFIG_KEYS:
-        raise ValueError(
-            "Config schema drifted from the canonical artifact: "
-            f"missing {sorted(CANONICAL_CONFIG_KEYS - set(config))}, "
-            f"extra {sorted(set(config) - CANONICAL_CONFIG_KEYS)}"
-        )
     _dump_canonical_json(config, config_path)
 
     def _token_entry(content: str) -> dict[str, Any]:

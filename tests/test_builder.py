@@ -273,12 +273,8 @@ def _synthetic_tokenizer(tokens, *, special=False):
 
 
 class TestOmnimodalDerivation:
-    @staticmethod
-    def _synthetic(tokens):
-        return _synthetic_tokenizer(tokens)
-
     def test_derives_offset_and_vocab_size(self):
-        tok = self._synthetic(
+        tok = _synthetic_tokenizer(
             ["<|img_start|>", "<|img_end|>"]
             + [f"<|visual token {i}|>" for i in range(3)]
         )
@@ -288,7 +284,7 @@ class TestOmnimodalDerivation:
         assert entry["offset"] == tok.convert_tokens_to_ids("<|visual token 0|>")
 
     def test_rejects_gapped_content_ids(self):
-        tok = self._synthetic(
+        tok = _synthetic_tokenizer(
             ["<|img_start|>", "<|img_end|>", "<|visual token 0|>", "<gap>"]
             + [f"<|visual token {i}|>" for i in range(1, 3)]
         )
@@ -296,7 +292,7 @@ class TestOmnimodalDerivation:
             build_omnimodal_config(1, tok, registry={"vision": VISION})
 
     def test_rejects_deleted_mid_range_tokens(self):
-        tok = self._synthetic(
+        tok = _synthetic_tokenizer(
             ["<|img_start|>", "<|img_end|>", "<|visual token 0|>", "<|visual token 1|>"]
             + ["<|visual token 4|>"]
         )
@@ -304,12 +300,12 @@ class TestOmnimodalDerivation:
             build_omnimodal_config(1, tok, registry={"vision": VISION})
 
     def test_absent_modality_yields_empty_config(self):
-        tok = self._synthetic(["<|img_start|>"])
+        tok = _synthetic_tokenizer(["<|img_start|>"])
         assert build_omnimodal_config(1, tok, registry={"vision": VISION}) == {}
 
     def test_zero_vocab_size_rejected(self, tmp_path):
         base = str(tmp_path / "base")
-        self._synthetic([]).save_pretrained(base)
+        _synthetic_tokenizer([]).save_pretrained(base)
         with pytest.raises(ValueError, match="must be positive"):
             add_modality(base, str(tmp_path / "out"), "vision", 0)
 

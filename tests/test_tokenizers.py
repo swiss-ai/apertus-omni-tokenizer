@@ -74,6 +74,11 @@ EXPECTED = {
 # is intentionally left unchanged, so the fix-behavior test runs on 1.5 alone.
 FIXED_TOKENIZERS = {"Apertus_1p5"}
 
+PINNED_DIRS = [p for p in TOKENIZER_DIRS if p.name in EXPECTED]
+RULE_PINNED_DIRS = [
+    p for p in TOKENIZER_DIRS if "normalizer_rules" in EXPECTED.get(p.name, {})
+]
+
 
 @pytest.mark.parametrize(
     "tok_dir", TOKENIZER_DIRS, ids=[p.name for p in TOKENIZER_DIRS]
@@ -95,11 +100,7 @@ def test_text_roundtrip(tok_dir):
     assert "Hello world" in decoded
 
 
-@pytest.mark.parametrize(
-    "tok_dir",
-    [p for p in TOKENIZER_DIRS if p.name in EXPECTED],
-    ids=[p.name for p in TOKENIZER_DIRS if p.name in EXPECTED],
-)
+@pytest.mark.parametrize("tok_dir", PINNED_DIRS, ids=lambda p: p.name)
 def test_special_token_encode(tok_dir):
     """Special tokens encode to their pinned IDs."""
     tok = AutoTokenizer.from_pretrained(str(tok_dir))
@@ -107,11 +108,7 @@ def test_special_token_encode(tok_dir):
         assert tok.encode(token, add_special_tokens=False) == ids, token
 
 
-@pytest.mark.parametrize(
-    "tok_dir",
-    [p for p in TOKENIZER_DIRS if p.name in EXPECTED],
-    ids=[p.name for p in TOKENIZER_DIRS if p.name in EXPECTED],
-)
+@pytest.mark.parametrize("tok_dir", PINNED_DIRS, ids=lambda p: p.name)
 def test_special_token_decode(tok_dir):
     """Reserved IDs decode to their pinned strings (pins the 32/33 asymmetry)."""
     tok = AutoTokenizer.from_pretrained(str(tok_dir))
@@ -119,11 +116,7 @@ def test_special_token_decode(tok_dir):
         assert tok.decode([token_id]) == expected, token_id
 
 
-@pytest.mark.parametrize(
-    "tok_dir",
-    [p for p in TOKENIZER_DIRS if p.name in EXPECTED],
-    ids=[p.name for p in TOKENIZER_DIRS if p.name in EXPECTED],
-)
+@pytest.mark.parametrize("tok_dir", PINNED_DIRS, ids=lambda p: p.name)
 def test_eos_token(tok_dir):
     """Apertus_1 mirrors upstream's eos; Apertus_1p5 carries the production
     convention (eos = </s>, turn/tool stops live in generation_config)."""
@@ -131,11 +124,7 @@ def test_eos_token(tok_dir):
     assert tok.eos_token == EXPECTED[tok_dir.name]["eos"]
 
 
-@pytest.mark.parametrize(
-    "tok_dir",
-    [p for p in TOKENIZER_DIRS if "normalizer_rules" in EXPECTED.get(p.name, {})],
-    ids=[p.name for p in TOKENIZER_DIRS if "normalizer_rules" in EXPECTED.get(p.name, {})],
-)
+@pytest.mark.parametrize("tok_dir", RULE_PINNED_DIRS, ids=lambda p: p.name)
 def test_normalizer_rules(tok_dir):
     """The canonical's Replace rules, in order: the reasoning-format rewrites
     (<|channel|>thought / <thought> / <think> -> delimiters, <answer> strips,

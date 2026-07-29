@@ -174,16 +174,13 @@ class TestAliasNormalizerChain:
             tj = json.load(f)
         flags = {e["content"]: e["normalized"] for e in tj["added_tokens"]}
         assert flags["<|image|>"] is True and flags["<|audio|>"] is True
-        with open(f"{base}/tokenizer_config.json") as f:
-            cfg = json.load(f)
-        # transformers 4.x mirrors the added tokens into the config, and its
-        # loader trusts the mirror over tokenizer.json; 5.x writes no mirror.
-        if "added_tokens_decoder" in cfg:
-            cfg_flags = {
-                e["content"]: e["normalized"]
-                for e in cfg["added_tokens_decoder"].values()
-            }
-            assert cfg_flags["<|image|>"] is True and cfg_flags["<|audio|>"] is True
+        # The flip must survive a reload through whichever save format the
+        # running transformers wrote (4.x trusts the config mirror over
+        # tokenizer.json; 5.x writes no mirror).
+        reloaded = AutoTokenizer.from_pretrained(base)
+        for name in ("<|image|>", "<|audio|>"):
+            entry = reloaded.added_tokens_decoder[reloaded.convert_tokens_to_ids(name)]
+            assert entry.normalized is True, name
 
     def test_realias_is_idempotent(self, tmp_path):
         base = self._make_base(tmp_path, normalizers.NFC())
