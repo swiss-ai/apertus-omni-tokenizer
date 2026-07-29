@@ -142,13 +142,6 @@ def rename_reserved_tokens(
         print(f"  Renamed {old} -> {new} (ID {token_id})")
 
 
-def rename_reserved_token(
-    save_path: str, tokenizer, old_token: str, new_token: str
-) -> None:
-    """Rename a single token; see ``rename_reserved_tokens``."""
-    rename_reserved_tokens(save_path, tokenizer, {old_token: new_token})
-
-
 def _flat_normalizer_chain(state: dict[str, Any]) -> list[dict[str, Any]]:
     """Return the tokenizer state's normalizer as a flat list of rules.
 

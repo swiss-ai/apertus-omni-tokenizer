@@ -17,7 +17,6 @@ from omnitok import (
 )
 from omnitok.io import (
     build_omnimodal_config,
-    rename_reserved_token,
     rename_reserved_tokens,
 )
 from omnitok.modalities import MODALITY_REGISTRY, VISION, AUDIO
@@ -408,13 +407,6 @@ class TestRenameReservedTokens:
         before = open(os.path.join(path, "tokenizer.json"), "rb").read()
         rename_reserved_tokens(path, tok, {"<|RESERVED_OMNI_007|>": "<|image|>"})
         assert open(os.path.join(path, "tokenizer.json"), "rb").read() == before
-
-    def test_single_token_wrapper(self, tmp_path):
-        tok, path = self._saved(tmp_path, ["<A>"])
-        before = tok.convert_tokens_to_ids("<A>")
-        rename_reserved_token(path, tok, "<A>", "<|img_start|>")
-        after = AutoTokenizer.from_pretrained(path)
-        assert after.convert_tokens_to_ids("<|img_start|>") == before
 
     def test_ids_never_move(self, tmp_path):
         tok, path = self._saved(tmp_path, ["<A>", "<B>"])
