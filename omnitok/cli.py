@@ -24,6 +24,18 @@ def cmd_add_modality(args: argparse.Namespace) -> None:
     )
 
 
+def cmd_build_apertus_1p5(args: argparse.Namespace) -> None:
+    from .apertus import build_apertus_1p5
+
+    build_apertus_1p5(
+        output_path=args.output_path,
+        base_tokenizer_path=args.base_tokenizer,
+        revision=args.revision,
+        chat_template_file=args.chat_template,
+        work_dir=args.work_dir,
+    )
+
+
 def cmd_build_apertus_2(args: argparse.Namespace) -> None:
     from .versions import apertus_2
 
@@ -79,6 +91,24 @@ def main() -> None:
     p_add.set_defaults(func=cmd_add_modality)
 
     # ── build-apertus-2 ───────────────────────────────────────────────────
+    from .apertus import BASE_REPO, BASE_REVISION
+
+    p_v15 = sub.add_parser(
+        "build-apertus-1p5",
+        help="Build the canonical Apertus 1.5 tokenizer from the Apertus 1 base.",
+    )
+    p_v15.add_argument("--output-path", required=True,
+                       help="Where to write the final tokenizer.")
+    p_v15.add_argument("--base-tokenizer", default=BASE_REPO,
+                       help=f"Apertus 1 tokenizer (path or HF ID, default: {BASE_REPO}).")
+    p_v15.add_argument("--revision", default=BASE_REVISION,
+                       help=f"Hub commit for --base-tokenizer (default: {BASE_REVISION[:12]}).")
+    p_v15.add_argument("--chat-template", default=None,
+                       help="Chat template file (default: the checked-in Apertus 1.5 template).")
+    p_v15.add_argument("--work-dir", default=None,
+                       help="Keep intermediate stage directories here instead of a tempdir.")
+    p_v15.set_defaults(func=cmd_build_apertus_1p5)
+
     p_v2 = sub.add_parser(
         "build-apertus-2",
         help="Build the Apertus 2 omni tokenizer from the pinned text base.",

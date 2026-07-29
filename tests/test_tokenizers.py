@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 from transformers import AutoTokenizer
 
+from omnitok.apertus import REASONING_DELIMITER_TOKENS
 from omnitok.io import mark_tokens_non_special
 
 TOKENIZERS_DIR = Path(__file__).resolve().parent.parent / "tokenizers"
@@ -35,8 +36,10 @@ EXPECTED = {
             "</think>": [33],
             "<|inner_prefix|>": [69],
             "<|inner_suffix|>": [70],
+            "<SPECIAL_73>": [73],
         },
         "decode": {32: "<think>", 33: "</think>"},
+        "eos": "<|assistant_end|>",
     },
     "Apertus_1p5": {
         "encode": {
@@ -44,8 +47,27 @@ EXPECTED = {
             "</think>": [33],
             "<|inner_prefix|>": [32],
             "<|inner_suffix|>": [33],
+            "<|tool_output_start|>": [73],
+            "<|tool_output_end|>": [74],
+            "<|image|>": [131079],
+            "<image>": [131079],
+            "<|audio|>": [131085],
         },
         "decode": {32: "<|inner_prefix|>", 33: "<|inner_suffix|>"},
+        "eos": "</s>",
+        "normalizer_rules": [
+            ("Regex", "<\\|channel\\|?>thought\\s*\\n", "<|inner_prefix|>"),
+            ("String", "<channel|>", "<|inner_suffix|>"),
+            ("String", "<thought>", "<|inner_prefix|>"),
+            ("String", "</thought>", "<|inner_suffix|>"),
+            ("String", "</answer>", ""),
+            ("String", "<answer>", ""),
+            ("Regex", "<\\|inner_suffix\\|>\\s+", "<|inner_suffix|>"),
+            ("String", "<audio>", "<|audio|>"),
+            ("String", "<image>", "<|image|>"),
+            ("String", "<think>", "<|inner_prefix|>"),
+            ("String", "</think>", "<|inner_suffix|>"),
+        ],
     },
     "Apertus_2": {
         "encode": {
@@ -65,6 +87,11 @@ EXPECTED = {
 # The reasoning-delimiter fix is applied to Apertus 1.5 only; the 1.0 tokenizer
 # is intentionally left unchanged, so the fix-behavior test runs on 1.5 alone.
 FIXED_TOKENIZERS = {"Apertus_1p5"}
+
+PINNED_DIRS = [p for p in TOKENIZER_DIRS if p.name in EXPECTED]
+RULE_PINNED_DIRS = [
+    p for p in TOKENIZER_DIRS if "normalizer_rules" in EXPECTED.get(p.name, {})
+]
 
 
 @pytest.mark.parametrize(
@@ -87,11 +114,7 @@ def test_text_roundtrip(tok_dir):
     assert "Hello world" in decoded
 
 
-@pytest.mark.parametrize(
-    "tok_dir",
-    [p for p in TOKENIZER_DIRS if p.name in EXPECTED],
-    ids=[p.name for p in TOKENIZER_DIRS if p.name in EXPECTED],
-)
+@pytest.mark.parametrize("tok_dir", PINNED_DIRS, ids=lambda p: p.name)
 def test_special_token_encode(tok_dir):
     """Special tokens encode to their pinned IDs."""
     tok = AutoTokenizer.from_pretrained(str(tok_dir))
@@ -99,16 +122,36 @@ def test_special_token_encode(tok_dir):
         assert tok.encode(token, add_special_tokens=False) == ids, token
 
 
-@pytest.mark.parametrize(
-    "tok_dir",
-    [p for p in TOKENIZER_DIRS if p.name in EXPECTED],
-    ids=[p.name for p in TOKENIZER_DIRS if p.name in EXPECTED],
-)
+@pytest.mark.parametrize("tok_dir", PINNED_DIRS, ids=lambda p: p.name)
 def test_special_token_decode(tok_dir):
     """Reserved IDs decode to their pinned strings (pins the 32/33 asymmetry)."""
     tok = AutoTokenizer.from_pretrained(str(tok_dir))
     for token_id, expected in EXPECTED[tok_dir.name]["decode"].items():
         assert tok.decode([token_id]) == expected, token_id
+
+
+@pytest.mark.parametrize("tok_dir", PINNED_DIRS, ids=lambda p: p.name)
+def test_eos_token(tok_dir):
+    """Apertus_1 mirrors upstream's eos; Apertus_1p5 carries the production
+    convention (eos = </s>, turn/tool stops live in generation_config)."""
+    tok = AutoTokenizer.from_pretrained(str(tok_dir))
+    assert tok.eos_token == EXPECTED[tok_dir.name]["eos"]
+
+
+@pytest.mark.parametrize("tok_dir", RULE_PINNED_DIRS, ids=lambda p: p.name)
+def test_normalizer_rules(tok_dir):
+    """The canonical's Replace rules, in order: the reasoning-format rewrites
+    (<|channel|>thought / <thought> / <think> -> delimiters, <answer> strips,
+    whitespace collapse) and the modality aliases. The rule set lives only in
+    the artifact; this pins it against silent drift."""
+    with open(tok_dir / "tokenizer.json") as f:
+        norm = json.load(f)["normalizer"]
+    rules = []
+    for r in norm["normalizers"]:
+        if r["type"] == "Replace":
+            kind = "Regex" if "Regex" in r["pattern"] else "String"
+            rules.append((kind, r["pattern"][kind], r["content"]))
+    assert rules == [tuple(r) for r in EXPECTED[tok_dir.name]["normalizer_rules"]]
 
 
 @pytest.mark.parametrize(
@@ -147,7 +190,7 @@ def test_mark_tokens_non_special_flips_and_is_idempotent(tmp_path):
     (tmp_path / "tokenizer.json").write_text(json.dumps(tj, indent=2))
     (tmp_path / "tokenizer_config.json").write_text(json.dumps(tc, indent=2))
 
-    flipped = mark_tokens_non_special(str(tmp_path))
+    flipped = mark_tokens_non_special(str(tmp_path), REASONING_DELIMITER_TOKENS)
     assert flipped == ["<|inner_prefix|>", "<|inner_suffix|>"]
 
     out_tj = json.loads((tmp_path / "tokenizer.json").read_text())
@@ -159,7 +202,7 @@ def test_mark_tokens_non_special_flips_and_is_idempotent(tmp_path):
     assert out_tc["added_tokens_decoder"]["33"]["special"] is False
 
     # Idempotent: nothing left to flip on a second run.
-    assert mark_tokens_non_special(str(tmp_path)) == []
+    assert mark_tokens_non_special(str(tmp_path), REASONING_DELIMITER_TOKENS) == []
 
 
 def test_mark_tokens_non_special_updates_special_tokens_map(tmp_path):
@@ -172,14 +215,14 @@ def test_mark_tokens_non_special_updates_special_tokens_map(tmp_path):
         "additional_special_tokens": ["<|inner_prefix|>", "<|keep_me|>"]
     }))
 
-    flipped = mark_tokens_non_special(str(tmp_path))
+    flipped = mark_tokens_non_special(str(tmp_path), REASONING_DELIMITER_TOKENS)
 
     # Reports the one present delimiter, NOT <|inner_suffix|>/<think>/</think>.
     assert flipped == ["<|inner_prefix|>"]
     stm = json.loads((tmp_path / "special_tokens_map.json").read_text())
     assert stm["additional_special_tokens"] == ["<|keep_me|>"]
     # Idempotent: nothing left to remove.
-    assert mark_tokens_non_special(str(tmp_path)) == []
+    assert mark_tokens_non_special(str(tmp_path), REASONING_DELIMITER_TOKENS) == []
 
 
 def test_mark_tokens_non_special_log_distinguishes_absent_from_already_fixed(
@@ -192,14 +235,14 @@ def test_mark_tokens_non_special_log_distinguishes_absent_from_already_fixed(
     (tmp_path / "tokenizer.json").write_text(json.dumps({
         "added_tokens": [{"id": 32, "content": "<|inner_prefix|>", "special": False}]
     }))
-    assert mark_tokens_non_special(str(tmp_path)) == []
+    assert mark_tokens_non_special(str(tmp_path), REASONING_DELIMITER_TOKENS) == []
     out = capsys.readouterr().out
     assert "already non-special" in out
     assert "No reasoning delimiters found" not in out
 
     # Genuinely absent -> "not found".
     (tmp_path / "tokenizer.json").write_text(json.dumps({"added_tokens": []}))
-    assert mark_tokens_non_special(str(tmp_path)) == []
+    assert mark_tokens_non_special(str(tmp_path), REASONING_DELIMITER_TOKENS) == []
     assert "No reasoning delimiters found" in capsys.readouterr().out
 
 
@@ -229,7 +272,7 @@ def test_mark_tokens_non_special_ignores_non_added_token_refs_and_key_order(
     }
     (tmp_path / "tokenizer.json").write_text(json.dumps(tj, indent=2))
 
-    flipped = mark_tokens_non_special(str(tmp_path))
+    flipped = mark_tokens_non_special(str(tmp_path), REASONING_DELIMITER_TOKENS)
 
     # inner_suffix flips despite reversed key order; inner_prefix is untouched
     # and not even reported "present" (it only appears in the Replace rule).
