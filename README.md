@@ -31,9 +31,8 @@ output tokens, normalizer alias/cleanup rules, vision + audio modalities, chat
 template, SFT sequences — is encoded in `omnitok/apertus.py`; that module's
 docstring is the audit trail of every delta between Apertus 1 and 1.5,
 including the deliberate repairs over the originally released RC artifact.
-Do not hand-edit
-tokenizer files: change the recipe (or the chat template under
-`chat_templates/Apertus_1p5/`) and rebuild.
+Do not hand-edit tokenizer files: change the recipe (or the chat template
+under `chat_templates/Apertus_1p5/`) and rebuild.
 
 ## Token layout
 

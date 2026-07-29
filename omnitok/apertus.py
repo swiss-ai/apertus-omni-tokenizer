@@ -42,8 +42,14 @@ form:
   ``backend``/``is_local`` fossils, and the multimodal role tokens exposed
   via ``extra_special_tokens`` for the Apertus1p5Processor.
 
-One canonical quirk is reproduced as-is: ``vocab_size: 131072`` is the base
-text vocab, not the true total of 266,440 (use ``len(tokenizer)``).
+Two canonical quirks are reproduced as-is:
+
+- ``vocab_size: 131072`` in tokenizer_config.json is the base text vocab,
+  not the true total of 266,440 (use ``len(tokenizer)``).
+- ``<|stt_translate|>`` (131086) carries a stray ``normalized: true`` flag,
+  left behind at slot 14 when the original artifact swapped the audio slot
+  names by string replacement. Harmless (the token has no alias); kept for
+  byte fidelity.
 """
 
 from __future__ import annotations

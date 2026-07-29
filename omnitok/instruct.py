@@ -97,9 +97,9 @@ def create_instruct_tokenizer(
         "modalities": list(existing["modalities"].keys()),
     }
 
-    # The template is consumed verbatim: the checked-in jinja under
-    # chat_templates/ is the hand-maintained ground truth, never rewritten
-    # at build time.
+    # The template is consumed verbatim, never rewritten at build time
+    # (for the recipe, the source is the hand-maintained jinja under
+    # chat_templates/).
     if "<|user_start|>" not in chat_template:
         raise ValueError("Unsupported chat template. Supported: Apertus.")
     # Since nothing is injected, every modality the tokenizer carries must be

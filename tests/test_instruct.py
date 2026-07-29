@@ -1,4 +1,4 @@
-"""Tests for chat-template patching in create_instruct_tokenizer()."""
+"""Tests for chat-template handling in create_instruct_tokenizer()."""
 
 from __future__ import annotations
 

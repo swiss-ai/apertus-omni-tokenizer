@@ -1,0 +1,2063 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 2c1186f..91865b0 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -16,8 +16,8 @@ jobs:
+           python-version: "3.11"
+       - uses: pre-commit/action@v3.0.1
+ 
+-  chat-template-tests:
+-    name: Chat template tests
++  tests:
++    name: Full test suite (incl. byte-identical 1.5 rebuild)
+     runs-on: ubuntu-latest
+     steps:
+       - uses: actions/checkout@v4
+@@ -28,23 +28,8 @@ jobs:
+ 
+       - run: pip install -e ".[dev]"
+ 
+-      - name: Run chat template tests
+-        run: pytest tests/test_chat_template.py -v
+-
+-  tokenizer-tests:
+-    name: Tokenizer load + round-trip tests
+-    runs-on: ubuntu-latest
+-    steps:
+-      - uses: actions/checkout@v4
+-
+-      - uses: actions/setup-python@v5
+-        with:
+-          python-version: "3.11"
+-
+-      - run: pip install -e ".[dev]"
+-
+-      - name: Run tokenizer tests
+-        run: pytest tests/test_tokenizers.py -v
++      - name: Run all tests
++        run: pytest tests/ -v
+ 
+   checksum-manifests:
+     name: Checksum manifests up to date
+diff --git a/README.md b/README.md
+index 2cf8360..7da92fd 100644
+--- a/README.md
++++ b/README.md
+@@ -1,41 +1,40 @@
+ # omnitok
+ 
+-This package documents the chat templates and core tokenizers used in Apertus, and provides utilities for extending LLaMA-3/Apertus text tokenizers with additional vision and audio modalities.
++This repo builds the canonical Apertus 1.5 tokenizer (`tokenizers/Apertus_1p5`,
++the reference for the [apertus-ai/Apertus-v1.5-8B](https://huggingface.co/apertus-ai/Apertus-v1.5-8B)
++release) from the Apertus 1 base
++([swiss-ai/Apertus-8B-2509](https://huggingface.co/swiss-ai/Apertus-8B-2509)),
++and documents the chat templates and canonical tokenizer files for both releases.
+ 
+-## Extension Scripts
++## Building the Apertus 1.5 tokenizer
+ 
+ ```bash
+-# Add vision
+-python -m omnitok.cli add-modality \
+-    --input-tokenizer swiss-ai/Apertus-8B-2509 \
+-    --output-path ./omni_vision \
+-    --modality vision \
+-    --vocab-size 131072
+-
+-# Stack audio on top
+-python -m omnitok.cli add-modality \
+-    --input-tokenizer ./omni_vision \
+-    --output-path ./omni_vision_audio \
+-    --modality audio \
+-    --vocab-size 4096
+-
+-# Add instruct (chat template + SFT sequences)
+-python -m omnitok.cli add-instruct \
+-    --base-tokenizer-path ./omni_vision_audio \
+-    --instruct-tokenizer-path swiss-ai/Apertus-8B-2509-Instruct \
+-    --output-path ./omni_instruct
++# From the pinned canonical base on the Hub
++python -m omnitok.cli --output-path ./Apertus_1p5
++
++# Offline, from the checked-in copy of the base
++python -m omnitok.cli --output-path ./Apertus_1p5 --base-tokenizer tokenizers/Apertus_1
+ ```
+ 
+ Or as a library:
+ 
+ ```python
+-from omnitok import add_modality, create_instruct_tokenizer
++from omnitok import build_apertus_1p5
+ 
+-add_modality("swiss-ai/Apertus-8B-2509", "./omni_vision", "vision", vocab_size=131072)
+-add_modality("./omni_vision", "./omni_vision_audio", "audio", vocab_size=4096)
+-create_instruct_tokenizer("./omni_vision_audio", "swiss-ai/Apertus-8B-2509-Instruct", "./omni_instruct")
++build_apertus_1p5("./Apertus_1p5")
+ ```
+ 
++The output is byte-identical to the canonical artifact (the manifest under
++`validation/` pins the md5 of every file, and `tests/test_apertus_recipe.py`
++rebuilds and checks this). The full recipe — reasoning-delimiter renames, tool
++output tokens, normalizer alias/cleanup rules, vision + audio modalities, chat
++template, SFT sequences — is encoded in `omnitok/apertus.py`; that module's
++docstring is the audit trail of every delta between Apertus 1 and 1.5,
++including the deliberate repairs over the originally released RC artifact.
++Do not hand-edit
++tokenizer files: change the recipe (or the chat template under
++`chat_templates/Apertus_1p5/`) and rebuild.
++
+ ## Token layout
+ 
+ ```
+@@ -59,7 +58,15 @@ create_instruct_tokenizer("./omni_vision_audio", "swiss-ai/Apertus-8B-2509-Instr
+ 
+ ## Token aliases
+ 
+-`<image>` and `<|image|>` encode to the same token ID. Same for `<audio>` / `<|audio|>`. Handled by the tokenizer's normalizer -- no manual `.replace()` needed in data loaders.
++`<image>`/`<|image|>` and `<audio>`/`<|audio|>` each encode to the same token
++ID, handled by the tokenizer's normalizer -- no manual `.replace()` needed in
++data loaders. `<think>`/`</think>` are likewise aliased to
++`<|inner_prefix|>`/`<|inner_suffix|>` (ids 32/33).
++
++(The originally released RC artifact shipped the `<audio>` alias broken:
++`<|audio|>` was left `normalized: false`, so bare `<audio>` encoded as plain
++text. The canonical artifact repairs this, and the build produces the
++repaired form.)
+ 
+ ## Known codebook sizes
+ 
+@@ -124,20 +131,20 @@ apertus-omni-tokenizer/
+ ├── validate_model.sh        # verify a served model dir matches canonical md5s
+ ├── omnitok/
+ │   ├── __init__.py      # public API exports
++│   ├── apertus.py       # build_apertus_1p5() -- the Apertus 1 -> 1.5 recipe
+ │   ├── modalities.py    # ModalityConfig dataclass, built-in VISION/AUDIO configs
+-│   ├── builder.py       # add_modality() -- the main engine
++│   ├── builder.py       # add_modality() -- modality engine (driven by the recipe)
+ │   ├── instruct.py      # create_instruct_tokenizer() -- chat template + SFT sequences
+ │   ├── io.py            # low-level file I/O (rename, alias, detect, save)
+ │   └── cli.py           # CLI wrapper (python -m omnitok.cli)
+ ├── tests/
+-│   ├── conftest.py           # shared fixtures
+-│   ├── test_alias.py         # token alias tests (<image> == <|image|>)
+-│   ├── test_builder.py       # add_modality tests
+-│   ├── test_chat_template.py # add chat template test
+-│   ├── test_task_tokens.py   # task token contract tests
+-│   └── test_tokenizers.py    # checked-in tokenizers load + special-token IDs
+-├── examples/
+-│   └── rename_tool_tokens.py # Script used to add new special tokens in tool calling parsing
++│   ├── conftest.py             # shared fixtures
++│   ├── test_alias.py           # token alias tests (<image> == <|image|>)
++│   ├── test_apertus_recipe.py  # build reproduces the canonical 1.5 byte-for-byte
++│   ├── test_builder.py         # add_modality tests
++│   ├── test_chat_template.py   # add chat template test
++│   ├── test_task_tokens.py     # task token contract tests
++│   └── test_tokenizers.py      # checked-in tokenizers load + special-token IDs
+ ├── tokenizers/
+ │   ├── Apertus_1/            # Instructed tokenizer used for Apertus 1.0
+ │   │   ├── tokenizer.json
+diff --git a/omnitok/__init__.py b/omnitok/__init__.py
+index 45c940d..91ecde7 100644
+--- a/omnitok/__init__.py
++++ b/omnitok/__init__.py
+@@ -1,5 +1,10 @@
+ """omnitok — Create omnimodal tokenizers."""
+ 
++from .apertus import (
++    add_reasoning_aliases,
++    build_apertus_1p5,
++    prepare_apertus_1p5_text_base,
++)
+ from .builder import add_modality
+ from .instruct import create_instruct_tokenizer
+ from .io import detect_existing_modalities, get_content_token_id, load_modality_mapping
+@@ -7,6 +12,9 @@ from .modalities import AUDIO, MODALITY_REGISTRY, VISION, ModalityConfig, TokenR
+ 
+ __all__ = [
+     "add_modality",
++    "add_reasoning_aliases",
++    "build_apertus_1p5",
++    "prepare_apertus_1p5_text_base",
+     "create_instruct_tokenizer",
+     "detect_existing_modalities",
+     "load_modality_mapping",
+diff --git a/omnitok/apertus.py b/omnitok/apertus.py
+new file mode 100644
+index 0000000..561cade
+--- /dev/null
++++ b/omnitok/apertus.py
+@@ -0,0 +1,448 @@
++"""Build recipe for the Apertus 1.5 tokenizer.
++
++Reproduces the canonical Apertus 1.5 tokenizer (tokenizers/Apertus_1p5, as
++pinned by validation/Apertus_1p5.md5) byte-for-byte from the Apertus 1 base
++(swiss-ai/Apertus-8B-2509). The recipe is the audit trail for every delta
++between the two:
++
++1. Text stage (`prepare_apertus_1p5_text_base`):
++   - ``<think>``/``</think>`` (ids 32/33) swap names with
++     ``<|inner_prefix|>``/``<|inner_suffix|>`` (ids 69/70), so the reasoning
++     delimiters emitted by the model live at 32/33.
++   - Ids 69/70 (now ``<think>``/``</think>``) are demoted from added tokens to
++     plain vocab entries: the literals ``<think>``/``</think>`` are aliased to
++     32/33 via the normalizer, so 69/70 must not be matched as added tokens.
++   - ``<SPECIAL_73>``/``<SPECIAL_74>`` become
++     ``<|tool_output_start|>``/``<|tool_output_end|>``.
++   - Ids 32/33 are marked non-special so the delimiters survive detokenization
++     under skip_special_tokens=True (apertus-omni-tokenizer #5).
++2. Vision modality: 200 RESERVED_OMNI slots + 131,072 Emu3.5 content tokens.
++3. Audio modality: 4,096 WavTokenizer content tokens.
++4. Instruct stage: the Apertus 1.5 chat template (maintained in this repo at
++   chat_templates/Apertus_1p5/chat_template.jinja) plus SFT begin/end
++   sequences.
++5. Finalize (`_finalize_apertus_1p5`): prepends the reasoning-trace cleanup
++   normalizer rules and writes tokenizer_config.json /
++   special_tokens_map.json / chat_template.jinja with a deterministic
++   serialization so the output does not depend on which transformers version
++   performed the build.
++
++The canonical artifact deliberately repairs three defects of the originally
++released RC (apertus-ai/Apertus-v1.5-8B-RC); the recipe builds the repaired
++form:
++
++- ``<|audio|>`` (131085) is ``normalized: true``, so the ``<audio>`` alias
++  rule matches just like ``<image>`` does. (The RC shipped it false, leaving
++  bare ``<audio>`` to encode as plain text.)
++- ``eos_token`` is ``</s>`` (id 2), the sequence terminator; the turn/tool
++  stop tokens live in generation_config, not here. (The RC inherited
++  ``<|assistant_end|>`` from the Apertus 1 base.)
++- ``tokenizer_config.json`` is the slim shape adopted from the aligned
++  integration repos: no ``added_tokens_decoder`` mirror, no
++  ``backend``/``is_local`` fossils, and the multimodal role tokens exposed
++  via ``extra_special_tokens`` for the Apertus1p5Processor.
++
++One canonical quirk is reproduced as-is: ``vocab_size: 131072`` is the base
++text vocab, not the true total of 266,440 (use ``len(tokenizer)``).
++"""
++
++from __future__ import annotations
++
++import json
++import os
++import shutil
++import tempfile
++from typing import Any
++
++from transformers import AutoTokenizer
++
++from .builder import add_modality
++from .instruct import create_instruct_tokenizer
++from .io import (
++    _prepend_rules,
++    _resolve_tokenizer_path,
++    _rewrite_backend_state,
++    add_token_alias,
++    mark_tokens_non_special,
++    prepend_normalizer_rules,
++)
++
++BASE_REPO = "swiss-ai/Apertus-8B-2509"
++# Hub repos are mutable (the sibling instruct repo had <SPECIAL_73> renamed
++# to <|image|> and reverted after release), so the base is pinned.
++BASE_REVISION = "3162c99675aa588097cecd4a24b9aa1f712af477"
++# The build is parent-agnostic between the two Apertus 1 repos: the instruct
++# tokenizer (swiss-ai/Apertus-8B-Instruct-2509 @
++# b946d40447b2b597999b9c86d44bee0b452c919f) reproduces the same bytes,
++# verified 2026-07-29. Its checked-in mirror (tokenizers/Apertus_1) is the
++# offline build source and the validate_model.sh baseline.
++
++BASE_VOCAB_SIZE = 131072
++VISION_VOCAB_SIZE = 131072
++AUDIO_VOCAB_SIZE = 4096
++FINAL_VOCAB_SIZE = 266440
++
++VISION_EXTRA_CONFIG = {
++    "codebook_size": VISION_VOCAB_SIZE,
++    "path": "/capstor/store/cscs/swissai/infra01/MLLM/tokenizer/Emu3.5-VisionTokenizer",
++    "type": "Emu3.5",
++}
++AUDIO_EXTRA_CONFIG = {
++    "codebook_size": AUDIO_VOCAB_SIZE,
++    "type": "wavtokenizer",
++}
++
++# Base-vocab renames, keyed by token id: id -> (expected old name, new name).
++# The old name is asserted before renaming so a rebuild on the wrong base
++# (e.g. a Hub snapshot where these slots were already renamed) fails loudly
++# instead of producing a differently-shaped artifact.
++TEXT_RENAMES: dict[int, tuple[str, str]] = {
++    32: ("<think>", "<|inner_prefix|>"),
++    33: ("</think>", "<|inner_suffix|>"),
++    69: ("<|inner_prefix|>", "<think>"),
++    70: ("<|inner_suffix|>", "</think>"),
++    73: ("<SPECIAL_73>", "<|tool_output_start|>"),
++    74: ("<SPECIAL_74>", "<|tool_output_end|>"),
++}
++
++# Dropped from added_tokens (they stay in the plain vocab): with the
++# <think>/</think> literals aliased to 32/33, the added-token matcher must not
++# grab them at 69/70 first.
++DEMOTED_TOKEN_IDS = (69, 70)
++
++# Reasoning-trace cleanup rules, prepended (in this order) in front of the
++# alias rules during finalization. They rewrite artifacts of earlier reasoning
++# formats (<thought>, <answer>, <|channel|>) into the 1.5 delimiters before
++# tokenization.
++REASONING_CLEANUP_RULES: tuple[dict[str, Any], ...] = (
++    {"type": "Replace", "pattern": {"Regex": r"<\|channel\|?>thought\s*\n"}, "content": "<|inner_prefix|>"},
++    {"type": "Replace", "pattern": {"String": "<channel|>"}, "content": "<|inner_suffix|>"},
++    {"type": "Replace", "pattern": {"String": "<thought>"}, "content": "<|inner_prefix|>"},
++    {"type": "Replace", "pattern": {"String": "</thought>"}, "content": "<|inner_suffix|>"},
++    {"type": "Replace", "pattern": {"String": "</answer>"}, "content": ""},
++    {"type": "Replace", "pattern": {"String": "<answer>"}, "content": ""},
++    {"type": "Replace", "pattern": {"Regex": r"<\|inner_suffix\|>\s+"}, "content": "<|inner_suffix|>"},
++)
++
++# Reasoning-delimiter tokens across both known tokenizer schemes. The canonical
++# repo build carries <|inner_prefix|>/<|inner_suffix|> at the emitted ids; some
++# deployed builds register <think>/</think> there instead. We flip whichever are
++# present, so this is safe to run on either scheme (apertus-omni-tokenizer #5).
++REASONING_DELIMITER_TOKENS = (
++    "<|inner_prefix|>",
++    "<|inner_suffix|>",
++    "<think>",
++    "</think>",
++)
++
++
++# Multimodal role tokens surfaced to the Apertus1p5Processor, both as the
++# extra_special_tokens dict and as their top-level config mirrors.
++EXTRA_SPECIAL_TOKENS = {
++    "audio_token": "<|audio|>",
++    "boa_token": "<|audio_start|>",
++    "boi_token": "<|img_start|>",
++    "eoa_token": "<|audio_end|>",
++    "eoi_token": "<|img_end|>",
++    "eol_token": "<|img_end_of_row|>",
++    "image_token": "<|image|>",
++    "image_wrapper_token": "<|img_token_start|>",
++}
++
++# Post-build encode pins: literal -> single expected id.
++_VERIFY_ENCODINGS = {
++    "<think>": 32,
++    "</think>": 33,
++    "<|inner_prefix|>": 32,
++    "<|inner_suffix|>": 33,
++    "<|tool_output_start|>": 73,
++    "<|tool_output_end|>": 74,
++    "<|RESERVED_OMNI_000|>": 131072,
++    "<|img_start|>": 131073,
++    "<|image|>": 131079,
++    "<image>": 131079,
++    "<|audio_start|>": 131080,
++    "<|audio|>": 131085,
++    "<audio>": 131085,
++    "<|visual token 0|>": 131272,
++    "<|audio token 0|>": 262344,
++}
++
++
++def _default_chat_template_path() -> str:
++    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++    return os.path.join(
++        repo_root, "chat_templates", "Apertus_1p5", "chat_template.jinja"
++    )
++
++
++def _dump_canonical_json(obj: dict[str, Any], path: str) -> None:
++    """transformers-style deterministic JSON: sorted keys, indent 2, LF tail."""
++    with open(path, "w", encoding="utf-8") as f:
++        f.write(json.dumps(obj, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
++
++
++def _add_think_aliases(save_path: str) -> None:
++    """Alias the <think>/</think> literals to the delimiters at 32/33.
++
++    Insertion order gives the canonical chain [<think> -> 32, </think> -> 33];
++    add_token_alias flips both targets to normalized=True.
++    """
++    tokenizer = AutoTokenizer.from_pretrained(save_path)
++    add_token_alias(save_path, "<|inner_suffix|>", "</think>",
++                    tokenizer=tokenizer, save=False)
++    add_token_alias(save_path, "<|inner_prefix|>", "<think>",
++                    tokenizer=tokenizer, save=True)
++
++
++def add_reasoning_aliases(save_path: str) -> None:
++    """Retrofit the canonical 1.5 reasoning rewrites onto an existing tokenizer.
++
++    Installs the same rules the build recipe does: <think>/</think> aliased to
++    the <|inner_prefix|>/<|inner_suffix|> delimiters (flipping the targets to
++    normalized=True), then the REASONING_CLEANUP_RULES prepended in front.
++    Idempotent; raises ValueError if a delimiter is not an added token.
++    """
++    _add_think_aliases(save_path)
++    prepend_normalizer_rules(save_path, REASONING_CLEANUP_RULES)
++
++
++def prepare_apertus_1p5_text_base(
++    base_tokenizer_path: str,
++    output_path: str,
++    *,
++    revision: str | None = None,
++) -> str:
++    """Turn the Apertus 1 tokenizer into the 1.5 text tokenizer.
++
++    Applies the base-vocab renames, demotes ids 69/70 to plain vocab entries,
++    aliases the <think>/</think> literals to the reasoning delimiters at
++    32/33, and marks those delimiters non-special. No omni tokens yet.
++    """
++    print("=" * 60)
++    print("APERTUS 1.5 TEXT BASE")
++    print("=" * 60)
++    src = _resolve_tokenizer_path(base_tokenizer_path, revision=revision)
++    print(f"Base: {src}")
++
++    os.makedirs(output_path, exist_ok=True)
++    for fname in (
++        "tokenizer.json",
++        "tokenizer_config.json",
++        "special_tokens_map.json",
++        "chat_template.jinja",
++    ):
++        fpath = os.path.join(src, fname)
++        if os.path.exists(fpath):
++            shutil.copyfile(fpath, os.path.join(output_path, fname))
++
++    def _apply_text_renames(state):
++        vocab = state["model"]["vocab"]
++        for token_id, (old, _) in TEXT_RENAMES.items():
++            if vocab.get(old) != token_id:
++                raise ValueError(
++                    f"Expected {old!r} at id {token_id} in the base vocab, "
++                    f"found id {vocab.get(old)!r}. {base_tokenizer_path} is "
++                    f"not the expected Apertus 1 base "
++                    f"({BASE_REPO} @ {BASE_REVISION})."
++                )
++        # Two phases: several renames swap names between ids, so setting new
++        # names while old ones are still present would clobber entries.
++        for _, (old, _) in TEXT_RENAMES.items():
++            del vocab[old]
++        for token_id, (_, new) in TEXT_RENAMES.items():
++            vocab[new] = token_id
++
++        added_by_id = {t["id"]: t for t in state["added_tokens"]}
++        for token_id, (old, new) in TEXT_RENAMES.items():
++            entry = added_by_id.get(token_id)
++            if entry is not None and entry["content"] == old:
++                entry["content"] = new
++        state["added_tokens"] = [
++            t for t in state["added_tokens"] if t["id"] not in DEMOTED_TOKEN_IDS
++        ]
++
++    _rewrite_backend_state(output_path, _apply_text_renames)
++    for token_id, (old, new) in TEXT_RENAMES.items():
++        print(f"  Renamed id {token_id}: {old} -> {new}")
++    print(f"  Demoted ids {DEMOTED_TOKEN_IDS} from added tokens")
++
++    # Keep tokenizer_config.json's added_tokens_decoder consistent, else the
++    # next load would resurrect the demoted/renamed entries from it.
++    config_path = os.path.join(output_path, "tokenizer_config.json")
++    with open(config_path, "r", encoding="utf-8") as f:
++        config = json.load(f)
++    decoder = config.get("added_tokens_decoder")
++    if decoder:
++        for token_id, (old, new) in TEXT_RENAMES.items():
++            entry = decoder.get(str(token_id))
++            if entry is not None and entry.get("content") == old:
++                entry["content"] = new
++        for token_id in DEMOTED_TOKEN_IDS:
++            decoder.pop(str(token_id), None)
++        with open(config_path, "w", encoding="utf-8") as f:
++            json.dump(config, f, indent=2)
++
++    _add_think_aliases(output_path)
++    mark_tokens_non_special(output_path, REASONING_DELIMITER_TOKENS)
++    return output_path
++
++
++def _finalize_apertus_1p5(output_path: str) -> None:
++    """Write the derived files in their canonical, deterministic form."""
++    # The original artifact swapped the names of audio slots 13/14 by string
++    # replacement, leaving the alias-ready normalized=true flag behind at
++    # slot 14 (<|stt_translate|>). The stray flag is harmless and kept as-is;
++    # the <|audio|> side of the swap was repaired in the canonical artifact
++    # (see module docstring), and the pipeline already builds it repaired.
++    def _keep_stt_flag_and_prepend_rules(state):
++        for entry in state["added_tokens"]:
++            if entry["content"] == "<|stt_translate|>":
++                entry["normalized"] = True
++        _prepend_rules(state, REASONING_CLEANUP_RULES)
++
++    _rewrite_backend_state(output_path, _keep_stt_flag_and_prepend_rules)
++
++    config_path = os.path.join(output_path, "tokenizer_config.json")
++    with open(config_path, "r", encoding="utf-8") as f:
++        built = json.load(f)
++
++    chat_template = built.pop("chat_template", None)
++    if chat_template is None:
++        raise ValueError("Pipeline did not produce a chat template.")
++    with open(os.path.join(output_path, "chat_template.jinja"), "w",
++              encoding="utf-8") as f:
++        f.write(chat_template)
++
++    carried_keys = (
++        "add_prefix_space", "added_tokens_count", "audio_begin_token",
++        "audio_end_token", "audio_tokenizer", "base_vocab_size", "bos_token",
++        "clean_up_tokenization_spaces", "model_input_names",
++        "model_max_length", "omnimodal_config", "pad_token", "padding_side",
++        "sft_assistant_begin_sequence", "sft_eot_token",
++        "sft_user_begin_sequence", "unk_token", "vision_begin_token",
++        "vision_end_token", "vision_tokenizer",
++    )
++    config = {key: built[key] for key in carried_keys}
++    config.update(EXTRA_SPECIAL_TOKENS)
++    config.update({
++        # The base stops on <|assistant_end|>; 1.5 ends sequences with the
++        # plain </s> terminator and keeps the turn/tool stops in
++        # generation_config.
++        "eos_token": "</s>",
++        "extra_special_tokens": dict(EXTRA_SPECIAL_TOKENS),
++        "processor_class": "Apertus1p5Processor",
++        "tokenizer_class": "PreTrainedTokenizerFast",
++        # Canonical quirk: the base text vocab size, not the true total.
++        "vocab_size": BASE_VOCAB_SIZE,
++    })
++    _dump_canonical_json(config, config_path)
++
++    def _token_entry(content: str) -> dict[str, Any]:
++        return {
++            "content": content,
++            "lstrip": False,
++            "normalized": False,
++            "rstrip": False,
++            "single_word": False,
++        }
++
++    _dump_canonical_json(
++        {
++            name: _token_entry(config[name])
++            for name in ("bos_token", "eos_token", "pad_token", "unk_token")
++        },
++        os.path.join(output_path, "special_tokens_map.json"),
++    )
++
++
++def _verify_apertus_1p5(output_path: str) -> None:
++    tokenizer = AutoTokenizer.from_pretrained(output_path)
++    if len(tokenizer) != FINAL_VOCAB_SIZE:
++        raise ValueError(
++            f"Built tokenizer has {len(tokenizer)} tokens, "
++            f"expected {FINAL_VOCAB_SIZE}"
++        )
++    if tokenizer.eos_token != "</s>":
++        raise ValueError(
++            f"eos_token is {tokenizer.eos_token!r}, expected '</s>'"
++        )
++    for literal, token_id in _VERIFY_ENCODINGS.items():
++        ids = tokenizer.encode(literal, add_special_tokens=False)
++        if ids != [token_id]:
++            raise ValueError(f"{literal!r} encodes to {ids}, expected [{token_id}]")
++    for token_id, expected in ((32, "<|inner_prefix|>"), (33, "<|inner_suffix|>")):
++        decoded = tokenizer.decode([token_id], skip_special_tokens=True)
++        if decoded != expected:
++            raise ValueError(
++                f"id {token_id} decodes to {decoded!r} under "
++                f"skip_special_tokens=True, expected {expected!r}"
++            )
++    print(f"Verified: {FINAL_VOCAB_SIZE:,} tokens, "
++          f"{len(_VERIFY_ENCODINGS)} encode pins, non-special delimiters")
++
++
++def build_apertus_1p5(
++    output_path: str,
++    *,
++    base_tokenizer_path: str = BASE_REPO,
++    revision: str | None = BASE_REVISION,
++    chat_template_file: str | None = None,
++    work_dir: str | None = None,
++) -> str:
++    """Build the canonical Apertus 1.5 tokenizer from the Apertus 1 base.
++
++    Args:
++        output_path: Where to write the final tokenizer.
++        base_tokenizer_path: The Apertus 1 tokenizer (local dir or
++            Hub ID). Defaults to the pinned canonical base.
++        revision: Hub commit for base_tokenizer_path; ignored for local dirs.
++        chat_template_file: The Apertus 1.5 chat template. Defaults to
++            chat_templates/Apertus_1p5/chat_template.jinja in this repo.
++        work_dir: Where to keep the intermediate stage directories (useful for
++            debugging). A temporary directory is used and removed by default.
++
++    Returns:
++        output_path.
++    """
++    if chat_template_file is None:
++        chat_template_file = _default_chat_template_path()
++    if not os.path.exists(chat_template_file):
++        raise FileNotFoundError(
++            f"Chat template not found: {chat_template_file}. Pass "
++            f"chat_template_file= explicitly when running outside the repo."
++        )
++
++    stages_tmp = None
++    if work_dir is None:
++        stages_tmp = tempfile.TemporaryDirectory(prefix="apertus_1p5_build_")
++        work_dir = stages_tmp.name
++    os.makedirs(work_dir, exist_ok=True)
++
++    try:
++        text_dir = os.path.join(work_dir, "text_base")
++        vision_dir = os.path.join(work_dir, "vision")
++        audio_dir = os.path.join(work_dir, "audio")
++
++        prepare_apertus_1p5_text_base(
++            base_tokenizer_path, text_dir, revision=revision
++        )
++        add_modality(
++            text_dir, vision_dir, "vision", VISION_VOCAB_SIZE,
++            extra_config=VISION_EXTRA_CONFIG,
++        )
++        add_modality(
++            vision_dir, audio_dir, "audio", AUDIO_VOCAB_SIZE,
++            extra_config=AUDIO_EXTRA_CONFIG,
++        )
++        create_instruct_tokenizer(
++            audio_dir, None, output_path, chat_template_file=chat_template_file
++        )
++        _finalize_apertus_1p5(output_path)
++        _verify_apertus_1p5(output_path)
++    finally:
++        if stages_tmp is not None:
++            stages_tmp.cleanup()
++
++    print(f"\nApertus 1.5 tokenizer written to {output_path}")
++    return output_path
+diff --git a/omnitok/builder.py b/omnitok/builder.py
+index 1a2e27e..07c2dd7 100644
+--- a/omnitok/builder.py
++++ b/omnitok/builder.py
+@@ -12,11 +12,11 @@ from tokenizers import AddedToken
+ from transformers import AutoTokenizer
+ 
+ from .io import (
++    _resolve_tokenizer_path,
+     add_token_alias,
+     build_omnimodal_config,
+     detect_existing_modalities,
+-    mark_tokens_non_special,
+-    rename_reserved_token,
++    rename_reserved_tokens,
+     save_tokenizer,
+     write_tokenizer_config,
+ )
+@@ -31,6 +31,7 @@ def add_modality(
+     *,
+     num_reserved_tokens: int = 200,
+     extra_config: dict[str, Any] | None = None,
++    revision: str | None = None,
+ ) -> tuple[Any, dict[str, Any]]:
+     """Add a modality to a tokenizer.
+ 
+@@ -45,6 +46,9 @@ def add_modality(
+         num_reserved_tokens: RESERVED_OMNI slots (default 200).
+         extra_config: Optional metadata for tokenizer_config.json
+                       (e.g. {"type": "Emu3.5", "path": "/path/to/model"}).
++        revision: Hub commit to pin when input_tokenizer_path is a repo ID.
++                  Hub repos are mutable (tokens can be renamed upstream after
++                  release), so reproducible builds should pin one.
+ 
+     Returns:
+         (tokenizer, stats) tuple.
+@@ -58,6 +62,8 @@ def add_modality(
+     print(f"ADDING MODALITY: {mc.name}")
+     print("=" * 60)
+ 
++    input_tokenizer_path = _resolve_tokenizer_path(input_tokenizer_path, revision=revision)
++
+     # Detect existing state
+     existing = detect_existing_modalities(input_tokenizer_path)
+ 
+@@ -103,8 +109,6 @@ def add_modality(
+             base_vocab_size,
+             omnimodal_config=omnimodal_config,
+         )
+-        if _is_apertus_1p5(tokenizer):
+-            mark_tokens_non_special(output_path)
+         stats["final_vocab_size"] = current_vocab_size
+         tokenizer = AutoTokenizer.from_pretrained(output_path, use_fast=True)
+         return tokenizer, stats
+@@ -151,9 +155,11 @@ def add_modality(
+ 
+     # Rename structure tokens
+     print(f"\nRenaming RESERVED_OMNI tokens to {mc.name} structure tokens...")
+-    for rename in mc.structure_tokens:
+-        old = f"<|RESERVED_OMNI_{rename.reserved_index:03d}|>"
+-        rename_reserved_token(output_path, tokenizer, old, rename.target_name)
++    renames = {
++        f"<|RESERVED_OMNI_{r.reserved_index:03d}|>": r.target_name
++        for r in mc.structure_tokens
++    }
++    rename_reserved_tokens(output_path, tokenizer, renames)
+ 
+     # Reload so returned tokenizer has renames applied.
+     tokenizer = AutoTokenizer.from_pretrained(output_path, use_fast=True)
+@@ -187,14 +193,6 @@ def add_modality(
+         omnimodal_config=omnimodal_config,
+     )
+ 
+-    # Keep the reasoning delimiters non-special so a reasoning parser can find
+-    # them in the detokenized output under the default skip_special_tokens=True
+-    # (apertus-omni-tokenizer #5). Apertus 1.5 only -- gated so a rebuild of an
+-    # older tokenizer (e.g. 1.0, which has <think>/</think> at 32/33) is left
+-    # untouched and stays consistent with its checked-in artifact.
+-    if _is_apertus_1p5(tokenizer):
+-        mark_tokens_non_special(output_path)
+-
+     # Reload after all file mutations so the returned tokenizer matches disk.
+     tokenizer = AutoTokenizer.from_pretrained(output_path, use_fast=True)
+ 
+@@ -207,17 +205,6 @@ def add_modality(
+ # ── Private helpers ──────────────────────────────────────────────────────────
+ 
+ 
+-def _is_apertus_1p5(tokenizer) -> bool:
+-    """True if this is the Apertus 1.5 tokenizer, keyed on its emitted reasoning
+-    delimiter ids: ``<|inner_prefix|>``/``<|inner_suffix|>`` at 32/33. Apertus 1.0
+-    carries ``<think>``/``</think>`` at 32/33 (with ``<|inner_*|>`` at 69/70), so
+-    this returns False there -- the reasoning fix is 1.5-only by design."""
+-    return (
+-        tokenizer.convert_tokens_to_ids("<|inner_prefix|>") == 32
+-        and tokenizer.convert_tokens_to_ids("<|inner_suffix|>") == 33
+-    )
+-
+-
+ def _resolve_modality(modality: str | ModalityConfig) -> ModalityConfig:
+     if isinstance(modality, ModalityConfig):
+         return modality
+diff --git a/omnitok/cli.py b/omnitok/cli.py
+index 4aee04a..4e58a4d 100644
+--- a/omnitok/cli.py
++++ b/omnitok/cli.py
+@@ -1,98 +1,55 @@
+-"""CLI entry points for omnitok."""
++"""CLI entry point: build the Apertus 1.5 tokenizer from the Apertus 1 base.
++
++The generic modality/instruct stages live in omnitok.builder / omnitok.instruct
++and are driven by the recipe in omnitok.apertus; this CLI exposes the recipe.
++"""
+ 
+ from __future__ import annotations
+ 
+ import argparse
+-import json
+-import sys
+-
+-
+-def cmd_add_modality(args: argparse.Namespace) -> None:
+-    from .builder import add_modality
+-
+-    extra_config = None
+-    if args.extra_config:
+-        extra_config = json.loads(args.extra_config)
+-
+-    add_modality(
+-        input_tokenizer_path=args.input_tokenizer,
+-        output_path=args.output_path,
+-        modality=args.modality,
+-        vocab_size=args.vocab_size,
+-        num_reserved_tokens=args.num_reserved_tokens,
+-        extra_config=extra_config,
+-    )
+-
+-
+-def cmd_add_instruct(args: argparse.Namespace) -> None:
+-    from .instruct import create_instruct_tokenizer
+-
+-    create_instruct_tokenizer(
+-        base_tokenizer_path=args.base_tokenizer_path,
+-        instruct_tokenizer_path=args.instruct_tokenizer_path,
+-        output_path=args.output_path,
+-    )
+ 
+ 
+ def main() -> None:
++    from .apertus import BASE_REPO, BASE_REVISION, build_apertus_1p5
++
+     parser = argparse.ArgumentParser(
+         prog="omni-tokenizer",
+-        description="Create omnimodal tokenizers by adding modality tokens to HuggingFace text tokenizers.",
+-    )
+-    sub = parser.add_subparsers(dest="command", required=True)
+-
+-    # ── add-modality ──────────────────────────────────────────────────────
+-    p_add = sub.add_parser(
+-        "add-modality",
+-        help="Add a modality (vision, audio, ...) to a tokenizer.",
++        description=(
++            "Build the canonical Apertus 1.5 tokenizer "
++            "(tokenizers/Apertus_1p5) from the Apertus 1 base."
++        ),
+     )
+-    p_add.add_argument(
+-        "--input-tokenizer", required=True,
+-        help="Path or HF model ID for the input tokenizer.",
+-    )
+-    p_add.add_argument(
++    parser.add_argument(
+         "--output-path", required=True,
+-        help="Where to save the result.",
++        help="Where to write the final tokenizer.",
+     )
+-    p_add.add_argument(
+-        "--modality", required=True,
+-        help="Modality name (vision, audio).",
++    parser.add_argument(
++        "--base-tokenizer", default=BASE_REPO,
++        help=f"Apertus 1 tokenizer (path or HF ID, default: {BASE_REPO}).",
+     )
+-    p_add.add_argument(
+-        "--vocab-size", type=int, required=True,
+-        help="Number of content tokens (codebook size).",
++    parser.add_argument(
++        "--revision", default=BASE_REVISION,
++        help="Hub commit for --base-tokenizer; ignored for local paths "
++             f"(default: {BASE_REVISION[:12]}).",
+     )
+-    p_add.add_argument(
+-        "--num-reserved-tokens", type=int, default=200,
+-        help="Number of RESERVED_OMNI slots (default: 200).",
++    parser.add_argument(
++        "--chat-template", default=None,
++        help="Apertus 1.5 chat template file "
++             "(default: chat_templates/Apertus_1p5/chat_template.jinja).",
+     )
+-    p_add.add_argument(
+-        "--extra-config", type=str, default=None,
+-        help='JSON string for modality metadata, e.g. \'{"type": "Emu3.5"}\'.',
++    parser.add_argument(
++        "--work-dir", default=None,
++        help="Keep intermediate stage directories here instead of a tempdir.",
+     )
+-    p_add.set_defaults(func=cmd_add_modality)
++    args = parser.parse_args()
+ 
+-    # ── add-instruct ──────────────────────────────────────────────────────
+-    p_inst = sub.add_parser(
+-        "add-instruct",
+-        help="Add chat template + SFT sequences to an omni-tokenizer.",
+-    )
+-    p_inst.add_argument(
+-        "--base-tokenizer-path", required=True,
+-        help="Path to base omni-tokenizer.",
+-    )
+-    p_inst.add_argument(
+-        "--instruct-tokenizer-path", required=True,
+-        help="Path or HF model ID for chat template source.",
+-    )
+-    p_inst.add_argument(
+-        "--output-path", required=True,
+-        help="Where to save the result.",
++    build_apertus_1p5(
++        output_path=args.output_path,
++        base_tokenizer_path=args.base_tokenizer,
++        revision=args.revision,
++        chat_template_file=args.chat_template,
++        work_dir=args.work_dir,
+     )
+-    p_inst.set_defaults(func=cmd_add_instruct)
+-
+-    args = parser.parse_args()
+-    args.func(args)
+ 
+ 
+ if __name__ == "__main__":
+diff --git a/omnitok/instruct.py b/omnitok/instruct.py
+index 6de9149..48226b3 100644
+--- a/omnitok/instruct.py
++++ b/omnitok/instruct.py
+@@ -13,138 +13,38 @@ from typing import Any
+ 
+ from transformers import AutoTokenizer
+ 
+-from .io import detect_existing_modalities
++from .io import _resolve_tokenizer_path, detect_existing_modalities
+ from .modalities import MODALITY_REGISTRY
+ 
+ 
+-_LLAMA_MULTIMODAL_RENDERER = """{%- macro render_content(content) -%}
+-    {%- if content is string -%}
+-        {{- content | trim -}}
+-    {%- elif content is sequence -%}
+-        {%- for item in content -%}
+-            {%- if item is string -%}
+-                {{- item | trim -}}
+-            {%- elif item is mapping -%}
+-                {%- if item.type == "text" -%}
+-                    {{- item.text | trim -}}
+-                {%- elif item.type == "image" or item.type == "image_url" or item.type == "input_image" -%}
+-                    {{- "<|image|>" -}}
+-                {%- elif item.type == "audio" or item.type == "audio_url" or item.type == "input_audio" -%}
+-                    {{- "<|audio|>" -}}
+-                {%- else -%}
+-                    {{- raise_exception("Invalid content item: " + item.type) -}}
+-                {%- endif -%}
+-            {%- else -%}
+-                {{- raise_exception("Invalid content item") -}}
+-            {%- endif -%}
+-            {%- if not loop.last -%}
+-                {{- "\\n" -}}
+-            {%- endif -%}
+-        {%- endfor -%}
+-    {%- else -%}
+-        {{- raise_exception("Invalid message content") -}}
+-    {%- endif -%}
+-{%- endmacro -%}"""
+-
+-
+-def _patch_llama_chat_template(chat_template: str) -> str:
+-    """Teach LLaMA-style templates to render structured image/audio blocks."""
+-    if "macro render_content(content)" in chat_template:
+-        return chat_template
+-
+-    replacements = (
+-        ("messages[0]['content']|trim", "render_content(messages[0]['content'])"),
+-        ("messages[0]['content'] | trim", "render_content(messages[0]['content'])"),
+-        ('messages[0]["content"]|trim', 'render_content(messages[0]["content"])'),
+-        ('messages[0]["content"] | trim', 'render_content(messages[0]["content"])'),
+-        ("message['content']|trim", "render_content(message['content'])"),
+-        ("message['content'] | trim", "render_content(message['content'])"),
+-        ('message["content"]|trim', 'render_content(message["content"])'),
+-        ('message["content"] | trim', 'render_content(message["content"])'),
+-    )
+-
+-    patched = chat_template
+-    replaced = False
+-    for old, new in replacements:
+-        if old in patched:
+-            patched = patched.replace(old, new)
+-            replaced = True
+-
+-    if not replaced:
+-        return chat_template
+-
+-    return _LLAMA_MULTIMODAL_RENDERER + "\n\n" + patched
+-
+-
+-_APERTUS_OMNI_SYSTEM_PROMPT = (
+-    "You are Apertus 1.5 Omni, a multimodal assistant developed by the "
+-    "Swiss AI Initiative. Extended from Apertus 1 via continued "
+-    "pretraining, you understand images and audio and respond in text."
+-)
+-
+-
+-def _patch_apertus_chat_template(chat_template: str) -> str:
+-    """Extend Apertus chat template for omni SFT.
+-
+-    - Adds audio rendering to user content parts.
+-    - Replaces the default no-system-message fallback with a static
+-      omni-aware system prompt. Drops the dynamic ``strftime_now`` call
+-      and the stale ``Knowledge cutoff`` line so that samples without an
+-      explicit system message render deterministically across training
+-      runs. Explicit system messages in data are still honored.
+-    """
+-    if "audio_token = '<|audio|>'" in chat_template:
+-        return chat_template
+-
+-    patched = chat_template
+-    image_token_line = "{%- set image_token = '<|image|>' -%}"
+-    if image_token_line in patched:
+-        patched = patched.replace(
+-            image_token_line,
+-            image_token_line + "\n{%- set audio_token = '<|audio|>' -%}",
+-            1,
+-        )
+-
+-    image_branch = """{%- elif part.type == "image" -%}
+-                        {{ image_token }}
+-                    {%- else -%}
+-                        {{- raise_exception("Invalid user part: " + part.type) -}}
+-                    {%- endif -%}"""
+-    audio_branch = """{%- elif part.type == "image" or part.type == "image_url" or part.type == "input_image" -%}
+-                        {{ image_token }}
+-                    {%- elif part.type == "audio" or part.type == "audio_url" or part.type == "input_audio" -%}
+-                        {{ audio_token }}
+-                    {%- else -%}
+-                        {{- raise_exception("Invalid user part: " + part.type) -}}
+-                    {%- endif -%}"""
+-    patched = patched.replace(image_branch, audio_branch, 1)
+-
+-    old_default_expr = (
+-        "'You are Apertus, a helpful assistant created by the SwissAI "
+-        "initiative.\\nKnowledge cutoff: 2024-04\\nCurrent date: ' "
+-        "+ strftime_now('%Y-%m-%d')"
+-    )
+-    new_default_expr = "'" + _APERTUS_OMNI_SYSTEM_PROMPT + "'"
+-    patched = patched.replace(old_default_expr, new_default_expr, 1)
+-
+-    return patched
+-
+-
+ def create_instruct_tokenizer(
+     base_tokenizer_path: str,
+-    instruct_tokenizer_path: str,
++    instruct_tokenizer_path: str | None,
+     output_path: str,
++    *,
++    chat_template_file: str | None = None,
++    instruct_revision: str | None = None,
+ ) -> tuple[Any, dict[str, Any]]:
+     """Add chat template and SFT sequences to a base omni-tokenizer.
+ 
+     Args:
+         base_tokenizer_path: Path to base omni-tokenizer (with modality tokens).
+         instruct_tokenizer_path: Path or HF model ID for chat template source.
++            May be None when chat_template_file is given.
+         output_path: Where to save the instruct tokenizer.
++        chat_template_file: Path to a Jinja file to use as the chat template
++            instead of loading one from instruct_tokenizer_path. Exactly one
++            of the two sources must be provided.
++        instruct_revision: Hub commit to pin when instruct_tokenizer_path is a
++            repo ID; Hub repos are mutable, so reproducible builds should pin.
+ 
+     Returns:
+         (tokenizer, stats) tuple.
+     """
++    if (instruct_tokenizer_path is None) == (chat_template_file is None):
++        raise ValueError(
++            "Provide exactly one of instruct_tokenizer_path or chat_template_file."
++        )
+     print("=" * 60)
+     print("CREATING INSTRUCT OMNI-TOKENIZER")
+     print("=" * 60)
+@@ -163,12 +63,21 @@ def create_instruct_tokenizer(
+     print(f"Detected modalities: {list(existing['modalities'].keys())}")
+ 
+     # Load chat template
+-    instruct_tokenizer = AutoTokenizer.from_pretrained(instruct_tokenizer_path)
+-    chat_template = instruct_tokenizer.chat_template
+-    if not chat_template:
+-        raise ValueError(
+-            f"No chat template found in {instruct_tokenizer_path}."
++    if chat_template_file is not None:
++        with open(chat_template_file, "r", encoding="utf-8") as f:
++            chat_template = f.read()
++        if not chat_template:
++            raise ValueError(f"Chat template file {chat_template_file} is empty.")
++    else:
++        instruct_tokenizer_path = _resolve_tokenizer_path(
++            instruct_tokenizer_path, revision=instruct_revision
+         )
++        instruct_tokenizer = AutoTokenizer.from_pretrained(instruct_tokenizer_path)
++        chat_template = instruct_tokenizer.chat_template
++        if not chat_template:
++            raise ValueError(
++                f"No chat template found in {instruct_tokenizer_path}."
++            )
+ 
+     # Copy base to output
+     if os.path.abspath(base_tokenizer_path) != os.path.abspath(output_path):
+@@ -188,23 +97,29 @@ def create_instruct_tokenizer(
+         "modalities": list(existing["modalities"].keys()),
+     }
+ 
+-    # Detect chat template style and add SFT sequences
+-    if "<|start_header_id|>" in chat_template:
+-        chat_template = _patch_llama_chat_template(chat_template)
+-        user_header = "<|start_header_id|>user<|end_header_id|>"
+-        assistant_header = "<|start_header_id|>assistant<|end_header_id|>"
+-        eot_token = "<|eot_id|>"
+-        print("Detected LLaMA-3 style chat template")
+-    elif "<|user_start|>" in chat_template:
+-        chat_template = _patch_apertus_chat_template(chat_template)
+-        user_header = "<|user_start|>"
+-        assistant_header = "<|assistant_start|>"
+-        eot_token = "<|assistant_end|>"
+-        print("Detected Apertus style chat template")
+-    else:
+-        raise ValueError(
+-            "Unsupported chat template. Supported: LLaMA-3, Apertus."
++    # The template is consumed verbatim: the checked-in jinja under
++    # chat_templates/ is the hand-maintained ground truth, never rewritten
++    # at build time.
++    if "<|user_start|>" not in chat_template:
++        raise ValueError("Unsupported chat template. Supported: Apertus.")
++    # Since nothing is injected, every modality the tokenizer carries must be
++    # renderable by the template as given: its content placeholder (the
++    # aliased structure token, e.g. <|image|>, <|audio|>) has to appear.
++    for name in existing["modalities"]:
++        modality = MODALITY_REGISTRY.get(name)
++        if modality is None:
++            continue
++        placeholder = next(
++            (t.target_name for t in modality.structure_tokens if t.alias), None
+         )
++        if placeholder is not None and placeholder not in chat_template:
++            raise ValueError(
++                f"Chat template does not reference {placeholder}; it cannot "
++                f"render {name} content."
++            )
++    user_header = "<|user_start|>"
++    assistant_header = "<|assistant_start|>"
++    eot_token = "<|assistant_end|>"
+ 
+     config["chat_template"] = chat_template
+ 
+@@ -233,8 +148,8 @@ def create_instruct_tokenizer(
+             print(f"  {name}_end_token: {end_ids} ({mc.end_token})")
+ 
+     # Save config
+-    with open(config_path, "w") as f:
+-        json.dump(config, f, indent=2)
++    with open(config_path, "w", encoding="utf-8") as f:
++        f.write(json.dumps(config, indent=2))
+ 
+     # Reload from output so returned tokenizer has chat_template set
+     tokenizer = AutoTokenizer.from_pretrained(output_path, use_fast=True)
+diff --git a/omnitok/io.py b/omnitok/io.py
+index c5f9022..c33ff53 100644
+--- a/omnitok/io.py
++++ b/omnitok/io.py
+@@ -24,7 +24,7 @@ original text-only size (e.g. 131072).  Always use ``len(tokenizer)`` or
+ Call flow (driven by builder.add_modality):
+ 
+     save_tokenizer()              # save HF tokenizer + write base metadata
+-    rename_reserved_token()       # e.g. <|RESERVED_OMNI_001|> -> <|img_start|>
++    rename_reserved_tokens()      # e.g. <|RESERVED_OMNI_001|> -> <|img_start|>
+     add_token_alias()             # e.g. <image> encodes to same ID as <|image|>
+     build_omnimodal_config()      # derive omnimodal metadata from the tokenizer
+     write_tokenizer_config()      # write all custom tokenizer_config.json fields
+@@ -35,7 +35,7 @@ from __future__ import annotations
+ import json
+ import os
+ import re
+-from typing import Any
++from typing import Any, Callable, Sequence
+ 
+ from huggingface_hub import snapshot_download
+ from huggingface_hub.utils import HFValidationError, RepositoryNotFoundError
+@@ -45,12 +45,14 @@ from transformers import AutoTokenizer
+ from .modalities import MODALITY_REGISTRY, ModalityConfig
+ 
+ 
+-def _resolve_tokenizer_path(tokenizer_path: str) -> str:
++def _resolve_tokenizer_path(tokenizer_path: str, revision: str | None = None) -> str:
+     """Resolve a tokenizer path to a local directory.
+ 
+     If ``tokenizer_path`` is already a local directory, returns it as-is.
+     Otherwise treats it as a HuggingFace Hub model ID and downloads/resolves
+-    it to the local cache.
++    it to the local cache. ``revision`` pins the Hub commit to fetch; Hub
++    repos are mutable, so reproducible builds should always pin one. It is
++    ignored for local directories.
+ 
+     Returns:
+         Absolute path to a local directory containing the tokenizer files.
+@@ -62,7 +64,11 @@ def _resolve_tokenizer_path(tokenizer_path: str) -> str:
+         return tokenizer_path
+ 
+     try:
+-        return snapshot_download(tokenizer_path)
++        return snapshot_download(
++            tokenizer_path,
++            revision=revision,
++            allow_patterns=["*.json", "*.jinja", "*.txt", "*.model"],
++        )
+     except (HFValidationError, RepositoryNotFoundError, OSError) as e:
+         raise FileNotFoundError(
+             f"'{tokenizer_path}' is not a local directory and could not be "
+@@ -73,54 +79,126 @@ def _resolve_tokenizer_path(tokenizer_path: str) -> str:
+ # ── Token manipulation ───────────────────────────────────────────────────────
+ 
+ 
+-def rename_reserved_token(
+-    save_path: str, tokenizer, old_token: str, new_token: str
++def _rewrite_backend_state(
++    save_path: str, mutate: Callable[[dict[str, Any]], None]
+ ) -> None:
+-    """Rename a token in the saved tokenizer files on disk.
++    """Round-trip tokenizer.json through the backend, applying ``mutate``.
++
++    The state dict is parsed back by the backend on save, so a malformed
++    edit raises instead of writing a corrupt file, and the serialization
++    stays identical to what the backend itself writes.
++    """
++    path = os.path.join(save_path, "tokenizer.json")
++    state = json.loads(Tokenizer.from_file(path).to_str())
++    mutate(state)
++    Tokenizer.from_str(json.dumps(state)).save(path, pretty=True)
+ 
+-    String-replaces all occurrences of old_token with new_token in both
+-    tokenizer.json and tokenizer_config.json. Skips if old_token is not
+-    in the vocabulary.
++
++def rename_reserved_tokens(
++    save_path: str, tokenizer, renames: dict[str, str]
++) -> None:
++    """Rename tokens in the saved tokenizer files on disk; ids never move.
++
++    tokenizer.json is rewritten structurally (vocab keys and added-token
++    contents); the tokenizer_config.json and special_tokens_map.json mirrors
++    swap exactly-equal string values. Old tokens missing from the vocabulary
++    are skipped.
+ 
+     Used to turn placeholders like <|RESERVED_OMNI_001|> into real names
+     like <|img_start|>.
+ 
+     Note: modifies files on disk, not the in-memory tokenizer object.
+-    Reload from disk after all renames to get the updated vocabulary.
++    Reload from disk after renaming to get the updated vocabulary.
+     """
+-    token_id = tokenizer.convert_tokens_to_ids(old_token)
+-    if token_id == tokenizer.unk_token_id:
+-        print(f"  {old_token} not found, skipping rename to {new_token}")
++    if set(renames) & set(renames.values()):
++        raise ValueError("rename sources and targets overlap")
++    targets = list(renames.values())
++    if len(set(targets)) != len(targets):
++        raise ValueError("duplicate rename targets")
++    present = {}
++    token_ids = {}
++    for old, new in renames.items():
++        token_id = tokenizer.backend_tokenizer.token_to_id(old)
++        if token_id is None:
++            print(f"  {old} not found, skipping rename to {new}")
++            continue
++        if tokenizer.backend_tokenizer.token_to_id(new) is not None:
++            raise ValueError(f"rename target {new} already in the vocabulary")
++        present[old] = new
++        token_ids[old] = token_id
++    if not present:
+         return
+ 
+-    tokenizer_json_path = os.path.join(save_path, "tokenizer.json")
+-    if os.path.exists(tokenizer_json_path):
+-        with open(tokenizer_json_path, "r", encoding="utf-8") as f:
+-            content = f.read()
+-        content = content.replace(f'"{old_token}"', f'"{new_token}"')
+-        content = content.replace(old_token, new_token)
+-        with open(tokenizer_json_path, "w", encoding="utf-8") as f:
+-            f.write(content)
+-
+-    config_path = os.path.join(save_path, "tokenizer_config.json")
+-    if os.path.exists(config_path):
+-        with open(config_path, "r", encoding="utf-8") as f:
+-            config = json.load(f)
++    def _rename(state):
++        vocab = state["model"]["vocab"]
++        for old, new in present.items():
++            if old in vocab:
++                vocab[new] = vocab.pop(old)
++        for entry in state["added_tokens"]:
++            if entry["content"] in present:
++                entry["content"] = present[entry["content"]]
++
++    _rewrite_backend_state(save_path, _rename)
++
++    def _replace(obj):
++        if isinstance(obj, dict):
++            return {k: _replace(v) for k, v in obj.items()}
++        elif isinstance(obj, list):
++            return [_replace(item) for item in obj]
++        elif isinstance(obj, str):
++            return present.get(obj, obj)
++        return obj
++
++    for fname in ("tokenizer_config.json", "special_tokens_map.json"):
++        mirror_path = os.path.join(save_path, fname)
++        if os.path.exists(mirror_path):
++            with open(mirror_path, "r", encoding="utf-8") as f:
++                data = json.load(f)
++            with open(mirror_path, "w", encoding="utf-8") as f:
++                f.write(json.dumps(_replace(data), indent=2))
++
++    for old, new in present.items():
++        print(f"  Renamed {old} -> {new} (ID {token_ids[old]})")
++
++
++def _flat_normalizer_chain(state: dict[str, Any]) -> list[dict[str, Any]]:
++    """Return the tokenizer state's normalizer as a flat list of rules.
++
++    The normalizer is rebuilt as a single flat Sequence from the tokenizer's
++    serialized state; nested Sequences lose their child rules on some
++    tokenizers versions.
++    """
++    existing = state.get("normalizer")
++    if existing is None:
++        return []
++    if existing["type"] == "Sequence":
++        return existing["normalizers"]
++    return [existing]
++
++
++def _prepend_rules(state: dict[str, Any], rules: Sequence[dict[str, Any]]) -> None:
++    """Insert ``rules`` at the front of the state's normalizer chain, first
++    rule first; rules already present are not duplicated."""
++    chain = _flat_normalizer_chain(state)
++    for rule in reversed(rules):
++        if rule not in chain:
++            chain.insert(0, rule)
++    state["normalizer"] = {"type": "Sequence", "normalizers": chain}
+ 
+-        def _replace(obj):
+-            if isinstance(obj, dict):
+-                return {k: _replace(v) for k, v in obj.items()}
+-            elif isinstance(obj, list):
+-                return [_replace(item) for item in obj]
+-            elif isinstance(obj, str):
+-                return obj.replace(old_token, new_token)
+-            return obj
+ 
+-        config = _replace(config)
+-        with open(config_path, "w", encoding="utf-8") as f:
+-            json.dump(config, f, indent=2)
++def prepend_normalizer_rules(
++    save_path: str, rules: Sequence[dict[str, Any]]
++) -> None:
++    """Insert normalizer ``rules`` at the front of the chain, first rule first.
+ 
+-    print(f"  Renamed {old_token} -> {new_token} (ID {token_id})")
++    Unlike :func:`add_token_alias`, this takes raw serialized rule dicts
++    (e.g. ``{"type": "Replace", "pattern": {"Regex": ...}, "content": ...}``),
++    so it can express Regex patterns and deletions whose replacement is not an
++    added token. Rules already present are not duplicated. Operates directly
++    on ``tokenizer.json``.
++    """
++    _rewrite_backend_state(save_path, lambda state: _prepend_rules(state, rules))
++    print(f"  Prepended {len(rules)} normalizer rules")
+ 
+ 
+ def add_token_alias(
+@@ -162,13 +240,7 @@ def add_token_alias(
+         raise ValueError(f"Alias target {token!r} is not an added token")
+     target["normalized"] = True
+ 
+-    existing = state.get("normalizer")
+-    if existing is None:
+-        chain = []
+-    elif existing["type"] == "Sequence":
+-        chain = existing["normalizers"]
+-    else:
+-        chain = [existing]
++    chain = _flat_normalizer_chain(state)
+     rule = {"type": "Replace", "pattern": {"String": alias}, "content": token}
+     if rule not in chain:
+         chain.insert(0, rule)
+@@ -181,20 +253,8 @@ def add_token_alias(
+     print(f"  Added alias {alias} -> {token}")
+ 
+ 
+-# Reasoning-delimiter tokens across both known tokenizer schemes. The canonical
+-# repo build carries <|inner_prefix|>/<|inner_suffix|> at the emitted ids; some
+-# deployed builds register <think>/</think> there instead. We flip whichever are
+-# present, so this is safe to run on either scheme (apertus-omni-tokenizer #5).
+-REASONING_DELIMITER_TOKENS = (
+-    "<|inner_prefix|>",
+-    "<|inner_suffix|>",
+-    "<think>",
+-    "</think>",
+-)
+-
+-
+ def mark_tokens_non_special(
+-    save_path: str, tokens: tuple[str, ...] = REASONING_DELIMITER_TOKENS
++    save_path: str, tokens: tuple[str, ...]
+ ) -> list[str]:
+     """Flip ``special`` to ``false`` for ``tokens`` in the saved tokenizer files.
+ 
+@@ -336,7 +396,7 @@ def write_tokenizer_config(
+             config.pop("omnimodal_config", None)
+ 
+     with open(config_path, "w", encoding="utf-8") as f:
+-        json.dump(config, f, indent=2)
++        f.write(json.dumps(config, indent=2))
+ 
+ 
+ def save_tokenizer(
+diff --git a/pyproject.toml b/pyproject.toml
+index e772be7..25a2010 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -8,7 +8,7 @@ version = "0.1.0"
+ requires-python = ">=3.9"
+ dependencies = [
+     "transformers",
+-    "tokenizers",
++    "tokenizers>=0.22.2",
+     "huggingface_hub",
+ ]
+ 
+diff --git a/tests/conftest.py b/tests/conftest.py
+index 0138310..3223a36 100644
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -5,6 +5,8 @@ import pytest
+ from omnitok import add_modality
+ 
+ BASE_TOKENIZER = "swiss-ai/Apertus-8B-2509"
++# Hub repos are mutable; pin the fixture base so runs are reproducible.
++BASE_REVISION = "3162c99675aa588097cecd4a24b9aa1f712af477"
+ SMALL_VOCAB = 32
+ 
+ 
+@@ -12,7 +14,8 @@ SMALL_VOCAB = 32
+ def vision_tokenizer(tmp_path_factory):
+     """Vision-only tokenizer with small vocab, created once per session."""
+     out = str(tmp_path_factory.mktemp("vision"))
+-    add_modality(BASE_TOKENIZER, out, "vision", SMALL_VOCAB)
++    add_modality(BASE_TOKENIZER, out, "vision", SMALL_VOCAB,
++                 revision=BASE_REVISION)
+     return out
+ 
+ 
+@@ -20,15 +23,14 @@ def vision_tokenizer(tmp_path_factory):
+ def audio_tokenizer(tmp_path_factory):
+     """Audio-only tokenizer with small vocab, created once per session."""
+     out = str(tmp_path_factory.mktemp("audio"))
+-    add_modality(BASE_TOKENIZER, out, "audio", SMALL_VOCAB)
++    add_modality(BASE_TOKENIZER, out, "audio", SMALL_VOCAB,
++                 revision=BASE_REVISION)
+     return out
+ 
+ 
+ @pytest.fixture(scope="session")
+-def stacked_tokenizer(tmp_path_factory):
++def stacked_tokenizer(tmp_path_factory, vision_tokenizer):
+     """Vision + audio stacked tokenizer, created once per session."""
+-    vision_out = str(tmp_path_factory.mktemp("stacked_vision"))
+-    add_modality(BASE_TOKENIZER, vision_out, "vision", SMALL_VOCAB)
+     stacked_out = str(tmp_path_factory.mktemp("stacked_both"))
+-    add_modality(vision_out, stacked_out, "audio", SMALL_VOCAB)
++    add_modality(vision_tokenizer, stacked_out, "audio", SMALL_VOCAB)
+     return stacked_out
+diff --git a/tests/test_alias.py b/tests/test_alias.py
+index 03d49c2..2649d05 100644
+--- a/tests/test_alias.py
++++ b/tests/test_alias.py
+@@ -11,6 +11,7 @@ import pytest
+ from tokenizers import Tokenizer, models, normalizers
+ from transformers import AddedToken, AutoTokenizer, PreTrainedTokenizerFast
+ 
++from omnitok.apertus import add_reasoning_aliases
+ from omnitok.io import add_token_alias
+ 
+ 
+@@ -173,12 +174,13 @@ class TestAliasNormalizerChain:
+             tj = json.load(f)
+         flags = {e["content"]: e["normalized"] for e in tj["added_tokens"]}
+         assert flags["<|image|>"] is True and flags["<|audio|>"] is True
+-        with open(f"{base}/tokenizer_config.json") as f:
+-            cfg = json.load(f)
+-        cfg_flags = {
+-            e["content"]: e["normalized"] for e in cfg["added_tokens_decoder"].values()
+-        }
+-        assert cfg_flags["<|image|>"] is True and cfg_flags["<|audio|>"] is True
++        # The flip must survive a reload through whichever save format the
++        # running transformers wrote (4.x trusts the config mirror over
++        # tokenizer.json; 5.x writes no mirror).
++        reloaded = AutoTokenizer.from_pretrained(base)
++        for name in ("<|image|>", "<|audio|>"):
++            entry = reloaded.added_tokens_decoder[reloaded.convert_tokens_to_ids(name)]
++            assert entry.normalized is True, name
+ 
+     def test_realias_is_idempotent(self, tmp_path):
+         base = self._make_base(tmp_path, normalizers.NFC())
+@@ -197,3 +199,71 @@ class TestAliasNormalizerChain:
+         base = self._make_base(tmp_path, normalizers.NFC())
+         with pytest.raises(ValueError, match="discard"):
+             add_token_alias(base, "<|image|>", "<image>", save=False)
++
++
++class TestReasoningAliases:
++    """add_reasoning_aliases installs the canonical reasoning rewrites.
++    Synthetic bases -- no network, no build."""
++
++    @staticmethod
++    def _base(tmp_path):
++        backend = Tokenizer(models.WordLevel({"<unk>": 0, "hi": 1}, unk_token="<unk>"))
++        tok = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="<unk>")
++        tok.add_tokens(
++            [
++                AddedToken("<|inner_prefix|>", special=False, normalized=False),
++                AddedToken("<|inner_suffix|>", special=False, normalized=False),
++            ]
++        )
++        out = str(tmp_path / "base")
++        tok.save_pretrained(out)
++        return out
++
++    def test_all_spellings_resolve_to_delimiters(self, tmp_path):
++        base = self._base(tmp_path)
++        add_reasoning_aliases(base)
++        tok = AutoTokenizer.from_pretrained(base)
++        prefix = tok.convert_tokens_to_ids("<|inner_prefix|>")
++        suffix = tok.convert_tokens_to_ids("<|inner_suffix|>")
++        for spelling, tid in (
++            ("<think>", prefix), ("<thought>", prefix),
++            ("</think>", suffix), ("</thought>", suffix), ("<channel|>", suffix),
++        ):
++            assert tok.encode(spelling, add_special_tokens=False) == [tid], spelling
++        assert tok.encode("<|channel|>thought\n", add_special_tokens=False) == [prefix]
++
++    def test_answer_wrappers_are_stripped(self, tmp_path):
++        base = self._base(tmp_path)
++        add_reasoning_aliases(base)
++        tok = AutoTokenizer.from_pretrained(base)
++        assert tok.encode("<answer>hi</answer>", add_special_tokens=False) == tok.encode(
++            "hi", add_special_tokens=False
++        )
++
++    def test_whitespace_after_suffix_collapses(self, tmp_path):
++        base = self._base(tmp_path)
++        add_reasoning_aliases(base)
++        tok = AutoTokenizer.from_pretrained(base)
++        assert tok.encode("<|inner_suffix|>   hi", add_special_tokens=False) == tok.encode(
++            "<|inner_suffix|>hi", add_special_tokens=False
++        )
++
++    def test_targets_flipped_and_idempotent(self, tmp_path):
++        base = self._base(tmp_path)
++        add_reasoning_aliases(base)
++        with open(f"{base}/tokenizer.json") as f:
++            tj = json.load(f)
++        flags = {t["content"]: t["normalized"] for t in tj["added_tokens"]}
++        assert flags["<|inner_prefix|>"] is True and flags["<|inner_suffix|>"] is True
++        n_rules = len(tj["normalizer"]["normalizers"])
++        add_reasoning_aliases(base)
++        with open(f"{base}/tokenizer.json") as f:
++            assert len(json.load(f)["normalizer"]["normalizers"]) == n_rules
++
++    def test_missing_delimiter_raises(self, tmp_path):
++        backend = Tokenizer(models.WordLevel({"<unk>": 0}, unk_token="<unk>"))
++        tok = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="<unk>")
++        out = str(tmp_path / "bare")
++        tok.save_pretrained(out)
++        with pytest.raises(ValueError, match="not an added token"):
++            add_reasoning_aliases(out)
+diff --git a/tests/test_apertus_recipe.py b/tests/test_apertus_recipe.py
+new file mode 100644
+index 0000000..ccf8157
+--- /dev/null
++++ b/tests/test_apertus_recipe.py
+@@ -0,0 +1,59 @@
++"""The Apertus 1.5 build recipe reproduces the canonical artifact.
++
++The whole point of this repo: running `build_apertus_1p5` on the Apertus 1
++base yields the canonical Apertus 1.5 tokenizer (tokenizers/Apertus_1p5)
++byte-for-byte, as pinned by the md5 manifest under validation/. The build runs
++offline from the checked-in copy of the base under tokenizers/Apertus_1.
++"""
++
++import hashlib
++from pathlib import Path
++
++import pytest
++
++from omnitok import build_apertus_1p5, prepare_apertus_1p5_text_base
++
++REPO_ROOT = Path(__file__).resolve().parent.parent
++MANIFEST = REPO_ROOT / "validation" / "Apertus_1p5.md5"
++BASE_DIR = REPO_ROOT / "tokenizers" / "Apertus_1"
++
++
++def _md5(path: Path) -> str:
++    return hashlib.md5(path.read_bytes()).hexdigest()
++
++
++@pytest.fixture(scope="module")
++def built_1p5(tmp_path_factory):
++    out = tmp_path_factory.mktemp("apertus_1p5_build") / "Apertus_1p5"
++    build_apertus_1p5(str(out), base_tokenizer_path=str(BASE_DIR))
++    return out
++
++
++def test_build_matches_canonical_manifest(built_1p5):
++    """Every file pinned in validation/Apertus_1p5.md5 is reproduced exactly."""
++    manifest = {}
++    for line in MANIFEST.read_text().splitlines():
++        digest, name = line.split()
++        manifest[name] = digest
++    assert manifest, "empty manifest"
++
++    built = {name: _md5(built_1p5 / name) for name in manifest}
++    mismatches = {
++        name: (built[name], digest)
++        for name, digest in manifest.items()
++        if built[name] != digest
++    }
++    assert not mismatches, (
++        f"Built files diverge from the canonical Apertus 1.5: {mismatches}"
++    )
++
++
++def test_wrong_base_is_rejected(tmp_path):
++    """Rebuilding on anything but the pinned Apertus 1 layout fails loudly
++    instead of producing a differently-shaped artifact (e.g. a base where the
++    reasoning/tool slots were already renamed)."""
++    with pytest.raises(ValueError, match="not the expected Apertus 1 base"):
++        prepare_apertus_1p5_text_base(
++            str(REPO_ROOT / "tokenizers" / "Apertus_1p5"),
++            str(tmp_path / "never_finished"),
++        )
+diff --git a/tests/test_builder.py b/tests/test_builder.py
+index beb1f83..0e71996 100644
+--- a/tests/test_builder.py
++++ b/tests/test_builder.py
+@@ -15,7 +15,10 @@ from omnitok import (
+     get_content_token_id,
+     load_modality_mapping,
+ )
+-from omnitok.io import build_omnimodal_config
++from omnitok.io import (
++    build_omnimodal_config,
++    rename_reserved_tokens,
++)
+ from omnitok.modalities import MODALITY_REGISTRY, VISION, AUDIO
+ 
+ BASE_TOKENIZER = "swiss-ai/Apertus-8B-2509"
+@@ -262,16 +265,16 @@ class TestExtraConfig:
+ # ── Omnimodal derivation (synthetic, no network) ─────────────────────────────
+ 
+ 
+-class TestOmnimodalDerivation:
+-    @staticmethod
+-    def _synthetic(tokens):
+-        backend = Tokenizer(models.WordLevel({"<unk>": 0}, unk_token="<unk>"))
+-        tok = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="<unk>")
+-        tok.add_tokens(tokens)
+-        return tok
++def _synthetic_tokenizer(tokens, *, special=False):
++    backend = Tokenizer(models.WordLevel({"<unk>": 0}, unk_token="<unk>"))
++    tok = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="<unk>")
++    tok.add_tokens(tokens, special_tokens=special)
++    return tok
+ 
++
++class TestOmnimodalDerivation:
+     def test_derives_offset_and_vocab_size(self):
+-        tok = self._synthetic(
++        tok = _synthetic_tokenizer(
+             ["<|img_start|>", "<|img_end|>"]
+             + [f"<|visual token {i}|>" for i in range(3)]
+         )
+@@ -281,7 +284,7 @@ class TestOmnimodalDerivation:
+         assert entry["offset"] == tok.convert_tokens_to_ids("<|visual token 0|>")
+ 
+     def test_rejects_gapped_content_ids(self):
+-        tok = self._synthetic(
++        tok = _synthetic_tokenizer(
+             ["<|img_start|>", "<|img_end|>", "<|visual token 0|>", "<gap>"]
+             + [f"<|visual token {i}|>" for i in range(1, 3)]
+         )
+@@ -289,7 +292,7 @@ class TestOmnimodalDerivation:
+             build_omnimodal_config(1, tok, registry={"vision": VISION})
+ 
+     def test_rejects_deleted_mid_range_tokens(self):
+-        tok = self._synthetic(
++        tok = _synthetic_tokenizer(
+             ["<|img_start|>", "<|img_end|>", "<|visual token 0|>", "<|visual token 1|>"]
+             + ["<|visual token 4|>"]
+         )
+@@ -297,12 +300,12 @@ class TestOmnimodalDerivation:
+             build_omnimodal_config(1, tok, registry={"vision": VISION})
+ 
+     def test_absent_modality_yields_empty_config(self):
+-        tok = self._synthetic(["<|img_start|>"])
++        tok = _synthetic_tokenizer(["<|img_start|>"])
+         assert build_omnimodal_config(1, tok, registry={"vision": VISION}) == {}
+ 
+     def test_zero_vocab_size_rejected(self, tmp_path):
+         base = str(tmp_path / "base")
+-        self._synthetic([]).save_pretrained(base)
++        _synthetic_tokenizer([]).save_pretrained(base)
+         with pytest.raises(ValueError, match="must be positive"):
+             add_modality(base, str(tmp_path / "out"), "vision", 0)
+ 
+@@ -328,20 +331,77 @@ class TestShipped1p5:
+         assert get_content_token_id(4095, SHIPPED_1P5, "audio") == 262344 + 4095
+ 
+ 
+-def test_is_apertus_1p5_gate():
+-    """The 1.5 reasoning fix is gated on the emitted delimiter ids: it applies
+-    only when <|inner_prefix|>/<|inner_suffix|> sit at 32/33 (Apertus 1.5), and
+-    is skipped for Apertus 1.0 (which has them at 69/70) so a 1.0 rebuild is left
+-    unchanged."""
+-    from omnitok.builder import _is_apertus_1p5
+-
+-    class _Tok:
+-        def __init__(self, ids):
+-            self._ids = ids
++class TestRenameReservedTokens:
++    @staticmethod
++    def _saved(tmp_path, tokens):
++        tok = _synthetic_tokenizer(tokens, special=True)
++        path = str(tmp_path / "tok")
++        tok.save_pretrained(path)
++        return tok, path
++
++    def test_config_string_values_are_renamed(self, tmp_path):
++        tok, path = self._saved(tmp_path, ["<A>"])
++        config_path = os.path.join(path, "tokenizer_config.json")
++        with open(config_path) as f:
++            config = json.load(f)
++        config["probe"] = "<A>"
++        with open(config_path, "w") as f:
++            json.dump(config, f)
+ 
+-        def convert_tokens_to_ids(self, token):
+-            return self._ids.get(token, 0)
++        rename_reserved_tokens(path, tok, {"<A>": "<|img_start|>"})
+ 
+-    assert _is_apertus_1p5(_Tok({"<|inner_prefix|>": 32, "<|inner_suffix|>": 33}))
+-    assert not _is_apertus_1p5(_Tok({"<|inner_prefix|>": 69, "<|inner_suffix|>": 70}))
+-    assert not _is_apertus_1p5(_Tok({"<|inner_prefix|>": 32}))  # partial -> no
++        with open(config_path) as f:
++            config = json.load(f)
++        assert config["probe"] == "<|img_start|>"
++
++    def test_special_tokens_map_is_renamed(self, tmp_path):
++        tok, path = self._saved(tmp_path, ["<A>"])
++        stm_path = os.path.join(path, "special_tokens_map.json")
++        with open(stm_path, "w") as f:
++            json.dump({"additional_special_tokens": ["<A>"]}, f)
++
++        rename_reserved_tokens(path, tok, {"<A>": "<|img_start|>"})
++
++        with open(stm_path) as f:
++            stm = json.load(f)
++        assert stm["additional_special_tokens"] == ["<|img_start|>"]
++
++    def test_all_absent_leaves_files_byte_identical(self, tmp_path):
++        tok, path = self._saved(tmp_path, ["<A>"])
++        before = {
++            name: open(os.path.join(path, name), "rb").read()
++            for name in ("tokenizer.json", "tokenizer_config.json")
++        }
++        rename_reserved_tokens(path, tok, {"<MISSING>": "<X>"})
++        for name, content in before.items():
++            assert open(os.path.join(path, name), "rb").read() == content
++
++    def test_rejects_chained_renames(self, tmp_path):
++        tok, path = self._saved(tmp_path, ["<A>", "<B>"])
++        with pytest.raises(ValueError, match="overlap"):
++            rename_reserved_tokens(path, tok, {"<A>": "<B>", "<B>": "<C>"})
++
++    def test_rejects_duplicate_targets(self, tmp_path):
++        tok, path = self._saved(tmp_path, ["<A>", "<B>"])
++        with pytest.raises(ValueError, match="duplicate"):
++            rename_reserved_tokens(path, tok, {"<A>": "<C>", "<B>": "<C>"})
++
++    def test_rejects_existing_target(self, tmp_path):
++        tok, path = self._saved(tmp_path, ["<A>", "<B>"])
++        with pytest.raises(ValueError, match="already in the vocabulary"):
++            rename_reserved_tokens(path, tok, {"<A>": "<B>"})
++
++    def test_absent_source_with_existing_target_skips(self, tmp_path):
++        tok, path = self._saved(tmp_path, ["<|image|>"])
++        before = open(os.path.join(path, "tokenizer.json"), "rb").read()
++        rename_reserved_tokens(path, tok, {"<|RESERVED_OMNI_007|>": "<|image|>"})
++        assert open(os.path.join(path, "tokenizer.json"), "rb").read() == before
++
++    def test_ids_never_move(self, tmp_path):
++        tok, path = self._saved(tmp_path, ["<A>", "<B>"])
++        renamed_id = tok.convert_tokens_to_ids("<A>")
++        bystander_id = tok.convert_tokens_to_ids("<B>")
++        rename_reserved_tokens(path, tok, {"<A>": "<|img_start|>"})
++        after = AutoTokenizer.from_pretrained(path)
++        assert after.convert_tokens_to_ids("<|img_start|>") == renamed_id
++        assert after.convert_tokens_to_ids("<B>") == bystander_id
+diff --git a/tests/test_instruct.py b/tests/test_instruct.py
+index d344ac8..f1ada24 100644
+--- a/tests/test_instruct.py
++++ b/tests/test_instruct.py
+@@ -4,27 +4,19 @@ from __future__ import annotations
+ 
+ import json
+ 
++import pytest
+ from tokenizers import Tokenizer
+ from tokenizers.models import WordLevel
+ from tokenizers.pre_tokenizers import Whitespace
+ from transformers import AutoTokenizer, PreTrainedTokenizerFast
+ 
+-from omnitok.instruct import (
+-    _patch_apertus_chat_template,
+-    _patch_llama_chat_template,
+-    create_instruct_tokenizer,
+-)
+-
+-LLAMA_TEMPLATE = """{{- bos_token }}
+-{%- for message in messages %}
+-    {{- '<|start_header_id|>' + message['role'] + '<|end_header_id|>\\n\\n'+ message['content'] | trim + '<|eot_id|>' }}
+-{%- endfor %}
+-"""
++from omnitok.instruct import create_instruct_tokenizer
+ 
+ APERTUS_TEMPLATE = """{{ bos_token }}
+ {%- set user_token = '<|user_start|>' -%}
+ {%- set end_user_token = '<|user_end|>' -%}
+ {%- set image_token = '<|image|>' -%}
++{%- set audio_token = '<|audio|>' -%}
+ {%- for message in messages -%}
+     {%- if message.role == 'user' -%}
+         {%- if "content" in message -%}
+@@ -38,6 +30,8 @@ APERTUS_TEMPLATE = """{{ bos_token }}
+                         {{ part.text }}
+                     {%- elif part.type == "image" -%}
+                         {{ image_token }}
++                    {%- elif part.type == "audio" -%}
++                        {{ audio_token }}
+                     {%- else -%}
+                         {{- raise_exception("Invalid user part: " + part.type) -}}
+                     {%- endif -%}
+@@ -59,9 +53,6 @@ def _make_tokenizer(chat_template: str | None = None) -> PreTrainedTokenizerFast
+         "<|audio_start|>",
+         "<|audio_end|>",
+         "<|image|>",
+-        "<|start_header_id|>user<|end_header_id|>",
+-        "<|start_header_id|>assistant<|end_header_id|>",
+-        "<|eot_id|>",
+         "<|user_start|>",
+         "<|assistant_start|>",
+         "<|assistant_end|>",
+@@ -114,44 +105,21 @@ def _write_omnimodal_config(path) -> None:
+         json.dump(config, f, indent=2)
+ 
+ 
+-class TestTemplatePatching:
+-    def test_llama_patch_renders_audio_blocks(self):
+-        tokenizer = _make_tokenizer(_patch_llama_chat_template(LLAMA_TEMPLATE))
+-        rendered = tokenizer.apply_chat_template(
+-            [
+-                {
+-                    "role": "user",
+-                    "content": [
+-                        {"type": "audio"},
+-                        {"type": "text", "text": "Transcribe this clip."},
+-                    ],
+-                }
+-            ],
+-            tokenize=False,
+-        )
++def test_template_missing_modality_placeholder_rejected(tmp_path):
++    """A template that cannot render a modality the tokenizer carries fails
++    the build instead of shipping silently."""
++    base_dir = tmp_path / "base"
++    instruct_dir = tmp_path / "instruct"
+ 
+-        assert "<|audio|>" in rendered
+-        assert "Transcribe this clip." in rendered
+-
+-    def test_apertus_patch_renders_audio_parts(self):
+-        tokenizer = _make_tokenizer(_patch_apertus_chat_template(APERTUS_TEMPLATE))
+-        rendered = tokenizer.apply_chat_template(
+-            [
+-                {
+-                    "role": "user",
+-                    "content": {
+-                        "parts": [
+-                            {"type": "audio"},
+-                            {"type": "text", "text": "Transcribe this clip."},
+-                        ]
+-                    },
+-                }
+-            ],
+-            tokenize=False,
+-        )
++    _save_tokenizer(base_dir)
++    _write_omnimodal_config(base_dir)
++    text_only = "{{ bos_token }}<|user_start|>{{ messages[0].content }}<|user_end|>"
++    _save_tokenizer(instruct_dir, text_only)
+ 
+-        assert "<|audio|>" in rendered
+-        assert "Transcribe this clip." in rendered
++    with pytest.raises(ValueError, match="cannot render audio"):
++        create_instruct_tokenizer(
++            str(base_dir), str(instruct_dir), str(tmp_path / "out")
++        )
+ 
+ 
+ def test_create_instruct_tokenizer_saves_audio_aware_chat_template(tmp_path):
+diff --git a/tests/test_tokenizers.py b/tests/test_tokenizers.py
+index 4e687f0..22d2474 100644
+--- a/tests/test_tokenizers.py
++++ b/tests/test_tokenizers.py
+@@ -16,6 +16,7 @@ from pathlib import Path
+ import pytest
+ from transformers import AutoTokenizer
+ 
++from omnitok.apertus import REASONING_DELIMITER_TOKENS
+ from omnitok.io import mark_tokens_non_special
+ 
+ TOKENIZERS_DIR = Path(__file__).resolve().parent.parent / "tokenizers"
+@@ -35,8 +36,10 @@ EXPECTED = {
+             "</think>": [33],
+             "<|inner_prefix|>": [69],
+             "<|inner_suffix|>": [70],
++            "<SPECIAL_73>": [73],
+         },
+         "decode": {32: "<think>", 33: "</think>"},
++        "eos": "<|assistant_end|>",
+     },
+     "Apertus_1p5": {
+         "encode": {
+@@ -44,8 +47,27 @@ EXPECTED = {
+             "</think>": [33],
+             "<|inner_prefix|>": [32],
+             "<|inner_suffix|>": [33],
++            "<|tool_output_start|>": [73],
++            "<|tool_output_end|>": [74],
++            "<|image|>": [131079],
++            "<image>": [131079],
++            "<|audio|>": [131085],
+         },
+         "decode": {32: "<|inner_prefix|>", 33: "<|inner_suffix|>"},
++        "eos": "</s>",
++        "normalizer_rules": [
++            ("Regex", "<\\|channel\\|?>thought\\s*\\n", "<|inner_prefix|>"),
++            ("String", "<channel|>", "<|inner_suffix|>"),
++            ("String", "<thought>", "<|inner_prefix|>"),
++            ("String", "</thought>", "<|inner_suffix|>"),
++            ("String", "</answer>", ""),
++            ("String", "<answer>", ""),
++            ("Regex", "<\\|inner_suffix\\|>\\s+", "<|inner_suffix|>"),
++            ("String", "<audio>", "<|audio|>"),
++            ("String", "<image>", "<|image|>"),
++            ("String", "<think>", "<|inner_prefix|>"),
++            ("String", "</think>", "<|inner_suffix|>"),
++        ],
+     },
+ }
+ 
+@@ -53,6 +75,11 @@ EXPECTED = {
+ # is intentionally left unchanged, so the fix-behavior test runs on 1.5 alone.
+ FIXED_TOKENIZERS = {"Apertus_1p5"}
+ 
++PINNED_DIRS = [p for p in TOKENIZER_DIRS if p.name in EXPECTED]
++RULE_PINNED_DIRS = [
++    p for p in TOKENIZER_DIRS if "normalizer_rules" in EXPECTED.get(p.name, {})
++]
++
+ 
+ @pytest.mark.parametrize(
+     "tok_dir", TOKENIZER_DIRS, ids=[p.name for p in TOKENIZER_DIRS]
+@@ -74,11 +101,7 @@ def test_text_roundtrip(tok_dir):
+     assert "Hello world" in decoded
+ 
+ 
+-@pytest.mark.parametrize(
+-    "tok_dir",
+-    [p for p in TOKENIZER_DIRS if p.name in EXPECTED],
+-    ids=[p.name for p in TOKENIZER_DIRS if p.name in EXPECTED],
+-)
++@pytest.mark.parametrize("tok_dir", PINNED_DIRS, ids=lambda p: p.name)
+ def test_special_token_encode(tok_dir):
+     """Special tokens encode to their pinned IDs."""
+     tok = AutoTokenizer.from_pretrained(str(tok_dir))
+@@ -86,11 +109,7 @@ def test_special_token_encode(tok_dir):
+         assert tok.encode(token, add_special_tokens=False) == ids, token
+ 
+ 
+-@pytest.mark.parametrize(
+-    "tok_dir",
+-    [p for p in TOKENIZER_DIRS if p.name in EXPECTED],
+-    ids=[p.name for p in TOKENIZER_DIRS if p.name in EXPECTED],
+-)
++@pytest.mark.parametrize("tok_dir", PINNED_DIRS, ids=lambda p: p.name)
+ def test_special_token_decode(tok_dir):
+     """Reserved IDs decode to their pinned strings (pins the 32/33 asymmetry)."""
+     tok = AutoTokenizer.from_pretrained(str(tok_dir))
+@@ -98,6 +117,30 @@ def test_special_token_decode(tok_dir):
+         assert tok.decode([token_id]) == expected, token_id
+ 
+ 
++@pytest.mark.parametrize("tok_dir", PINNED_DIRS, ids=lambda p: p.name)
++def test_eos_token(tok_dir):
++    """Apertus_1 mirrors upstream's eos; Apertus_1p5 carries the production
++    convention (eos = </s>, turn/tool stops live in generation_config)."""
++    tok = AutoTokenizer.from_pretrained(str(tok_dir))
++    assert tok.eos_token == EXPECTED[tok_dir.name]["eos"]
++
++
++@pytest.mark.parametrize("tok_dir", RULE_PINNED_DIRS, ids=lambda p: p.name)
++def test_normalizer_rules(tok_dir):
++    """The canonical's Replace rules, in order: the reasoning-format rewrites
++    (<|channel|>thought / <thought> / <think> -> delimiters, <answer> strips,
++    whitespace collapse) and the modality aliases. The rule set lives only in
++    the artifact; this pins it against silent drift."""
++    with open(tok_dir / "tokenizer.json") as f:
++        norm = json.load(f)["normalizer"]
++    rules = []
++    for r in norm["normalizers"]:
++        if r["type"] == "Replace":
++            kind = "Regex" if "Regex" in r["pattern"] else "String"
++            rules.append((kind, r["pattern"][kind], r["content"]))
++    assert rules == [tuple(r) for r in EXPECTED[tok_dir.name]["normalizer_rules"]]
++
++
+ @pytest.mark.parametrize(
+     "tok_dir",
+     [p for p in TOKENIZER_DIRS if p.name in FIXED_TOKENIZERS],
+@@ -134,7 +177,7 @@ def test_mark_tokens_non_special_flips_and_is_idempotent(tmp_path):
+     (tmp_path / "tokenizer.json").write_text(json.dumps(tj, indent=2))
+     (tmp_path / "tokenizer_config.json").write_text(json.dumps(tc, indent=2))
+ 
+-    flipped = mark_tokens_non_special(str(tmp_path))
++    flipped = mark_tokens_non_special(str(tmp_path), REASONING_DELIMITER_TOKENS)
+     assert flipped == ["<|inner_prefix|>", "<|inner_suffix|>"]
+ 
+     out_tj = json.loads((tmp_path / "tokenizer.json").read_text())
+@@ -146,7 +189,7 @@ def test_mark_tokens_non_special_flips_and_is_idempotent(tmp_path):
+     assert out_tc["added_tokens_decoder"]["33"]["special"] is False
+ 
+     # Idempotent: nothing left to flip on a second run.
+-    assert mark_tokens_non_special(str(tmp_path)) == []
++    assert mark_tokens_non_special(str(tmp_path), REASONING_DELIMITER_TOKENS) == []
+ 
+ 
+ def test_mark_tokens_non_special_updates_special_tokens_map(tmp_path):
+@@ -159,14 +202,14 @@ def test_mark_tokens_non_special_updates_special_tokens_map(tmp_path):
+         "additional_special_tokens": ["<|inner_prefix|>", "<|keep_me|>"]
+     }))
+ 
+-    flipped = mark_tokens_non_special(str(tmp_path))
++    flipped = mark_tokens_non_special(str(tmp_path), REASONING_DELIMITER_TOKENS)
+ 
+     # Reports the one present delimiter, NOT <|inner_suffix|>/<think>/</think>.
+     assert flipped == ["<|inner_prefix|>"]
+     stm = json.loads((tmp_path / "special_tokens_map.json").read_text())
+     assert stm["additional_special_tokens"] == ["<|keep_me|>"]
+     # Idempotent: nothing left to remove.
+-    assert mark_tokens_non_special(str(tmp_path)) == []
++    assert mark_tokens_non_special(str(tmp_path), REASONING_DELIMITER_TOKENS) == []
+ 
+ 
+ def test_mark_tokens_non_special_log_distinguishes_absent_from_already_fixed(
+@@ -179,14 +222,14 @@ def test_mark_tokens_non_special_log_distinguishes_absent_from_already_fixed(
+     (tmp_path / "tokenizer.json").write_text(json.dumps({
+         "added_tokens": [{"id": 32, "content": "<|inner_prefix|>", "special": False}]
+     }))
+-    assert mark_tokens_non_special(str(tmp_path)) == []
++    assert mark_tokens_non_special(str(tmp_path), REASONING_DELIMITER_TOKENS) == []
+     out = capsys.readouterr().out
+     assert "already non-special" in out
+     assert "No reasoning delimiters found" not in out
+ 
+     # Genuinely absent -> "not found".
+     (tmp_path / "tokenizer.json").write_text(json.dumps({"added_tokens": []}))
+-    assert mark_tokens_non_special(str(tmp_path)) == []
++    assert mark_tokens_non_special(str(tmp_path), REASONING_DELIMITER_TOKENS) == []
+     assert "No reasoning delimiters found" in capsys.readouterr().out
+ 
+ 
+@@ -216,7 +259,7 @@ def test_mark_tokens_non_special_ignores_non_added_token_refs_and_key_order(
+     }
+     (tmp_path / "tokenizer.json").write_text(json.dumps(tj, indent=2))
+ 
+-    flipped = mark_tokens_non_special(str(tmp_path))
++    flipped = mark_tokens_non_special(str(tmp_path), REASONING_DELIMITER_TOKENS)
+ 
+     # inner_suffix flips despite reversed key order; inner_prefix is untouched
+     # and not even reported "present" (it only appears in the Replace rule).
