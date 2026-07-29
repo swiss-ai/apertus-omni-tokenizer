@@ -81,6 +81,7 @@ EXPECTED = {
             "<|audio token 4095|>": [335231],
         },
         "decode": {18: "<|image|>", 27: "<|img_start|>", 200064: "<|visual token 0|>"},
+        "eos": "</s>",
     },
 }
 

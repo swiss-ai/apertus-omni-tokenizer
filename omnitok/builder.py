@@ -165,6 +165,7 @@ def add_modality_in_place(
     renames: dict[str, str],
     reused_ids: dict[str, int],
     expected_base_vocab_size: int | None = None,
+    publish_structure_ids: bool = False,
 ) -> tuple[Any, dict[str, Any]]:
     """Add a modality by renaming the base's pre-baked reserve slots.
 
@@ -223,6 +224,7 @@ def add_modality_in_place(
     tokenizer = _assemble(
         output_path, tokenizer, mc, vocab_size, base_vocab_size,
         renames, extra_config=None,
+        publish_structure_ids=publish_structure_ids,
     )
     return tokenizer, stats
 
@@ -279,6 +281,7 @@ def _assemble(
     base_vocab_size: int,
     renames: dict[str, str],
     extra_config: dict[str, Any] | None,
+    publish_structure_ids: bool = False,
 ) -> Any:
     """Save, rename, alias, and write omnimodal metadata; returns the reloaded tokenizer."""
     save_tokenizer(
@@ -305,7 +308,9 @@ def _assemble(
         tokenizer.save_pretrained(output_path)
 
     # build_omnimodal_config verifies content-id contiguity for every modality.
-    omnimodal_config = build_omnimodal_config(base_vocab_size, tokenizer)
+    omnimodal_config = build_omnimodal_config(
+        base_vocab_size, tokenizer, publish_structure_ids=publish_structure_ids
+    )
     built = next(
         (m for m in omnimodal_config.get("modalities", []) if m["name"] == mc.name),
         None,

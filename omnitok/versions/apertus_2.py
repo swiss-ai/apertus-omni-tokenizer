@@ -49,12 +49,14 @@ def build(input_tokenizer_path: str, output_path: str):
         renames=VISION_RENAMES,
         reused_ids={"<|image|>": REUSED_IDS["<|image|>"]},
         expected_base_vocab_size=BASE_VOCAB_SIZE,
+        publish_structure_ids=True,
     )
     tokenizer, stats = add_modality_in_place(
         output_path, output_path, "audio", AUDIO_VOCAB_SIZE,
         renames=AUDIO_RENAMES,
         reused_ids={"<|audio|>": REUSED_IDS["<|audio|>"]},
         expected_base_vocab_size=BASE_VOCAB_SIZE,
+        publish_structure_ids=True,
     )
     if len(tokenizer) != TOTAL_VOCAB_SIZE:
         raise ValueError(
