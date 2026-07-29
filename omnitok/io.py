@@ -35,7 +35,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from typing import Any
+from typing import Any, Callable, Sequence
 
 from huggingface_hub import snapshot_download
 from huggingface_hub.utils import HFValidationError, RepositoryNotFoundError
@@ -45,12 +45,14 @@ from transformers import AutoTokenizer
 from .modalities import MODALITY_REGISTRY, ModalityConfig
 
 
-def _resolve_tokenizer_path(tokenizer_path: str) -> str:
+def _resolve_tokenizer_path(tokenizer_path: str, revision: str | None = None) -> str:
     """Resolve a tokenizer path to a local directory.
 
     If ``tokenizer_path`` is already a local directory, returns it as-is.
     Otherwise treats it as a HuggingFace Hub model ID and downloads/resolves
-    it to the local cache.
+    it to the local cache. ``revision`` pins the Hub commit to fetch; Hub
+    repos are mutable, so reproducible builds should always pin one. It is
+    ignored for local directories.
 
     Returns:
         Absolute path to a local directory containing the tokenizer files.
@@ -62,7 +64,11 @@ def _resolve_tokenizer_path(tokenizer_path: str) -> str:
         return tokenizer_path
 
     try:
-        return snapshot_download(tokenizer_path)
+        return snapshot_download(
+            tokenizer_path,
+            revision=revision,
+            allow_patterns=["*.json", "*.jinja", "*.txt", "*.model"],
+        )
     except (HFValidationError, RepositoryNotFoundError, OSError) as e:
         raise FileNotFoundError(
             f"'{tokenizer_path}' is not a local directory and could not be "
@@ -73,14 +79,30 @@ def _resolve_tokenizer_path(tokenizer_path: str) -> str:
 # ── Token manipulation ───────────────────────────────────────────────────────
 
 
+def _rewrite_backend_state(
+    save_path: str, mutate: Callable[[dict[str, Any]], None]
+) -> None:
+    """Round-trip tokenizer.json through the backend, applying ``mutate``.
+
+    The state dict is parsed back by the backend on save, so a malformed
+    edit raises instead of writing a corrupt file, and the serialization
+    stays identical to what the backend itself writes.
+    """
+    path = os.path.join(save_path, "tokenizer.json")
+    state = json.loads(Tokenizer.from_file(path).to_str())
+    mutate(state)
+    Tokenizer.from_str(json.dumps(state)).save(path, pretty=True)
+
+
 def rename_reserved_tokens(
     save_path: str, tokenizer, renames: dict[str, str]
 ) -> None:
-    """Rename tokens in the saved tokenizer files on disk, in one pass.
+    """Rename tokens in the saved tokenizer files on disk; ids never move.
 
-    Replaces each quoted old token in tokenizer.json and each exactly-matching
-    string value in tokenizer_config.json; ids never move.
-    Old tokens missing from the vocabulary are skipped.
+    tokenizer.json is rewritten structurally (vocab keys and added-token
+    contents); the tokenizer_config.json and special_tokens_map.json mirrors
+    swap exactly-equal string values. Old tokens missing from the vocabulary
+    are skipped.
 
     Used to turn placeholders like <|RESERVED_OMNI_001|> into real names
     like <|img_start|>.
@@ -90,45 +112,93 @@ def rename_reserved_tokens(
     """
     if set(renames) & set(renames.values()):
         raise ValueError("rename sources and targets overlap")
-    vocab = tokenizer.get_vocab()
+    targets = list(renames.values())
+    if len(set(targets)) != len(targets):
+        raise ValueError("duplicate rename targets")
     present = {}
+    token_ids = {}
     for old, new in renames.items():
-        if old in vocab:
-            present[old] = new
-        else:
+        token_id = tokenizer.backend_tokenizer.token_to_id(old)
+        if token_id is None:
             print(f"  {old} not found, skipping rename to {new}")
+            continue
+        if tokenizer.backend_tokenizer.token_to_id(new) is not None:
+            raise ValueError(f"rename target {new} already in the vocabulary")
+        present[old] = new
+        token_ids[old] = token_id
     if not present:
         return
 
-    tokenizer_json_path = os.path.join(save_path, "tokenizer.json")
-    if os.path.exists(tokenizer_json_path):
-        with open(tokenizer_json_path, "r", encoding="utf-8") as f:
-            content = f.read()
+    def _rename(state):
+        vocab = state["model"]["vocab"]
         for old, new in present.items():
-            content = content.replace(f'"{old}"', f'"{new}"')
-        with open(tokenizer_json_path, "w", encoding="utf-8") as f:
-            f.write(content)
+            if old in vocab:
+                vocab[new] = vocab.pop(old)
+        for entry in state["added_tokens"]:
+            if entry["content"] in present:
+                entry["content"] = present[entry["content"]]
 
-    config_path = os.path.join(save_path, "tokenizer_config.json")
-    if os.path.exists(config_path):
-        with open(config_path, "r", encoding="utf-8") as f:
-            config = json.load(f)
+    _rewrite_backend_state(save_path, _rename)
 
-        def _replace(obj):
-            if isinstance(obj, dict):
-                return {k: _replace(v) for k, v in obj.items()}
-            elif isinstance(obj, list):
-                return [_replace(item) for item in obj]
-            elif isinstance(obj, str):
-                return present.get(obj, obj)
-            return obj
+    def _replace(obj):
+        if isinstance(obj, dict):
+            return {k: _replace(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [_replace(item) for item in obj]
+        elif isinstance(obj, str):
+            return present.get(obj, obj)
+        return obj
 
-        config = _replace(config)
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=2)
+    for fname in ("tokenizer_config.json", "special_tokens_map.json"):
+        mirror_path = os.path.join(save_path, fname)
+        if os.path.exists(mirror_path):
+            with open(mirror_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            with open(mirror_path, "w", encoding="utf-8") as f:
+                f.write(json.dumps(_replace(data), indent=2))
 
     for old, new in present.items():
-        print(f"  Renamed {old} -> {new} (ID {vocab[old]})")
+        print(f"  Renamed {old} -> {new} (ID {token_ids[old]})")
+
+
+def _flat_normalizer_chain(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return the tokenizer state's normalizer as a flat list of rules.
+
+    The normalizer is rebuilt as a single flat Sequence from the tokenizer's
+    serialized state; nested Sequences lose their child rules on some
+    tokenizers versions.
+    """
+    existing = state.get("normalizer")
+    if existing is None:
+        return []
+    if existing["type"] == "Sequence":
+        return existing["normalizers"]
+    return [existing]
+
+
+def _prepend_rules(state: dict[str, Any], rules: Sequence[dict[str, Any]]) -> None:
+    """Insert ``rules`` at the front of the state's normalizer chain, first
+    rule first; rules already present are not duplicated."""
+    chain = _flat_normalizer_chain(state)
+    for rule in reversed(rules):
+        if rule not in chain:
+            chain.insert(0, rule)
+    state["normalizer"] = {"type": "Sequence", "normalizers": chain}
+
+
+def prepend_normalizer_rules(
+    save_path: str, rules: Sequence[dict[str, Any]]
+) -> None:
+    """Insert normalizer ``rules`` at the front of the chain, first rule first.
+
+    Unlike :func:`add_token_alias`, this takes raw serialized rule dicts
+    (e.g. ``{"type": "Replace", "pattern": {"Regex": ...}, "content": ...}``),
+    so it can express Regex patterns and deletions whose replacement is not an
+    added token. Rules already present are not duplicated. Operates directly
+    on ``tokenizer.json``.
+    """
+    _rewrite_backend_state(save_path, lambda state: _prepend_rules(state, rules))
+    print(f"  Prepended {len(rules)} normalizer rules")
 
 
 def add_token_alias(
@@ -170,13 +240,7 @@ def add_token_alias(
         raise ValueError(f"Alias target {token!r} is not an added token")
     target["normalized"] = True
 
-    existing = state.get("normalizer")
-    if existing is None:
-        chain = []
-    elif existing["type"] == "Sequence":
-        chain = existing["normalizers"]
-    else:
-        chain = [existing]
+    chain = _flat_normalizer_chain(state)
     rule = {"type": "Replace", "pattern": {"String": alias}, "content": token}
     if rule not in chain:
         chain.insert(0, rule)
@@ -189,20 +253,8 @@ def add_token_alias(
     print(f"  Added alias {alias} -> {token}")
 
 
-# Reasoning-delimiter tokens across both known tokenizer schemes. The canonical
-# repo build carries <|inner_prefix|>/<|inner_suffix|> at the emitted ids; some
-# deployed builds register <think>/</think> there instead. We flip whichever are
-# present, so this is safe to run on either scheme (apertus-omni-tokenizer #5).
-REASONING_DELIMITER_TOKENS = (
-    "<|inner_prefix|>",
-    "<|inner_suffix|>",
-    "<think>",
-    "</think>",
-)
-
-
 def mark_tokens_non_special(
-    save_path: str, tokens: tuple[str, ...] = REASONING_DELIMITER_TOKENS
+    save_path: str, tokens: tuple[str, ...]
 ) -> list[str]:
     """Flip ``special`` to ``false`` for ``tokens`` in the saved tokenizer files.
 
@@ -344,7 +396,7 @@ def write_tokenizer_config(
             config.pop("omnimodal_config", None)
 
     with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=2)
+        f.write(json.dumps(config, indent=2))
 
 
 def save_tokenizer(

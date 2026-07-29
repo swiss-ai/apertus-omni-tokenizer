@@ -1,25 +1,81 @@
 # omnitok
 
-This package stores the canonical chat templates and tokenizers shipped with Apertus, and
-provides utilities for **extending** a LLaMA-3/Apertus text tokenizer with vision and audio
-modalities.
+This repo builds the canonical Apertus 1.5 tokenizer (`tokenizers/Apertus_1p5`,
+the reference for the [apertus-ai/Apertus-v1.5-8B](https://huggingface.co/apertus-ai/Apertus-v1.5-8B)
+release) from the Apertus 1 base
+([swiss-ai/Apertus-8B-2509](https://huggingface.co/swiss-ai/Apertus-8B-2509)),
+and documents the chat templates and canonical tokenizer files for both releases.
 
-## Shipped Tokenizers & Templates
+## Building the Apertus 1.5 tokenizer
 
-The final instruct omni-tokenizers used in production are checked into this repo. Each
-tokenizer directory holds `tokenizer.json`, `tokenizer_config.json`, and
-`special_tokens_map.json`.
+```bash
+# From the pinned canonical base on the Hub
+python -m omnitok.cli --output-path ./Apertus_1p5
 
+# Offline, from the checked-in copy of the base
+python -m omnitok.cli --output-path ./Apertus_1p5 --base-tokenizer tokenizers/Apertus_1
+```
 
-| Model       | Tokenizer                 | Chat template                                    | Checksum manifest            |
-| ----------- | ------------------------- | ------------------------------------------------ | ---------------------------- |
-| Apertus 1.0 | `tokenizers/Apertus_1/`   | `chat_templates/Apertus_1/chat_template.jinja`   | `validation/Apertus_1.md5`   |
-| Apertus 1.5 | `tokenizers/Apertus_1p5/` | `chat_templates/Apertus_1p5/chat_template.jinja` | `validation/Apertus_1p5.md5` |
+Or as a library:
 
+```python
+from omnitok import build_apertus_1p5
 
+build_apertus_1p5("./Apertus_1p5")
+```
 
+The output is byte-identical to the canonical artifact (the manifest under
+`validation/` pins the md5 of every file, and `tests/test_apertus_recipe.py`
+rebuilds and checks this). The full recipe — reasoning-delimiter renames, tool
+output tokens, normalizer alias/cleanup rules, vision + audio modalities, chat
+template, SFT sequences — is encoded in `omnitok/apertus.py`; that module's
+docstring is the audit trail of every delta between Apertus 1 and 1.5,
+including the deliberate repairs over the originally released RC artifact.
+Do not hand-edit tokenizer files: change the recipe (or the chat template
+under `chat_templates/Apertus_1p5/`) and rebuild.
 
-### Validating a deployed model
+## Token layout
+
+```
+[0 .. base-1]           text tokens (unchanged)
+[base .. base+199]      200 reserved OMNI slots
+  slot 0                  boundary marker (never renamed)
+  slots 1-7               vision structure tokens
+  slots 8-15              audio structure tokens
+  slots 16-199            reserved for future modalities
+[base+200 .. ]          content tokens (appended per modality in order added)
+```
+
+## Reserved slot allocation
+
+| Slots | Modality | Tokens |
+|-------|----------|--------|
+| 0 | -- | `<\|RESERVED_OMNI_000\|>` (boundary) |
+| 1-7 | Vision | img_start, img_end, img_token_start, img_end_of_row, img_end_of_frame, img_generation_start, image |
+| 8-15 | Audio | audio_start, audio_end, stt_transcribe, stt_continue, tts_continue, audio, stt_translate, audio_annotate |
+| 16-199 | -- | Reserved |
+
+## Token aliases
+
+`<image>`/`<|image|>` and `<audio>`/`<|audio|>` each encode to the same token
+ID, handled by the tokenizer's normalizer -- no manual `.replace()` needed in
+data loaders. `<think>`/`</think>` are likewise aliased to
+`<|inner_prefix|>`/`<|inner_suffix|>` (ids 32/33).
+
+(The originally released RC artifact shipped the `<audio>` alias broken:
+`<|audio|>` was left `normalized: false`, so bare `<audio>` encoded as plain
+text. The canonical artifact repairs this, and the build produces the
+repaired form.)
+
+## Known codebook sizes
+
+| Tokenizer | Modality | Codebook Size |
+|-----------|----------|---------------|
+| Emu3.5 (IBQ) | Vision | 131,072 |
+| Emu3 | Vision | 32,768 |
+| WavTokenizer | Audio | 4,096 |
+
+## Validating a deployed model
 
 To check that a served model directory ships the exact canonical tokenizer (chat
 template, tokenizer, config, special tokens), run `validate_model.sh` against it.
@@ -35,8 +91,13 @@ curl -fsSL https://raw.githubusercontent.com/swiss-ai/apertus-omni-tokenizer/mai
 # To validate the 1.0 tokenizer instead, pass the path slot + model name
 #   | bash -s -- . Apertus_1
 
+# Repair mode: download the canonical copy of each missing/mismatched file,
+# back the old one up as <file>.bak, then re-validate
+#   | bash -s -- --fix
+
 # From a local checkout
 bash validate_model.sh /path/to/served/model
+bash validate_model.sh --fix /path/to/served/model
 ```
 
 ```
@@ -50,193 +111,51 @@ Validating Apertus_1p5 tokenizer in: /path/to/served/model
 OK: Apertus_1p5 tokenizer matches the canonical checksums.
 ```
 
-Arguments: `validate_model.sh [MODEL_PATH] [MODEL_NAME]` -- `MODEL_PATH` defaults
-to the current directory, `MODEL_NAME` defaults to `Apertus_1p5` (pass
-`Apertus_1` to validate the 1.0 tokenizer). The canonical checksums are
-regenerated by `validation/gen_checksums.sh` and kept in sync by CI.
+Arguments: `validate_model.sh [--fix] [MODEL_PATH] [MODEL_NAME]` -- `MODEL_PATH`
+defaults to the current directory, `MODEL_NAME` defaults to `Apertus_1p5` (pass
+`Apertus_1` to validate the 1.0 tokenizer). With `--fix`, each missing or
+mismatched manifest file is re-downloaded from this repo (verified against the
+manifest md5 before installing; the existing file is saved as `<file>.bak`,
+never overwriting earlier backups — repeat runs write `<file>.bak.1`, `.bak.2`,
+...) and the validation is re-run. `generation_config.json` is checked field-level and
+is not auto-fixed. The canonical checksums are regenerated by
+`validation/gen_checksums.sh` and kept in sync by CI.
 
-## Extending Tokenizers
-
-`add_modality()` turns a base **text** tokenizer into an **omni** tokenizer by adding
-vision/audio tokens: a reserved block is appended on top of the base vocab, slots are
-renamed into structure tokens, and one content token per codebook entry is appended.
-That is the Apertus 1.0/1.5 path, frozen as the `omnitok.versions.apertus_1p5` recipe.
-
-Apertus 2 uses `add_modality_in_place()` instead: its base pre-bakes the omni specials,
-so the recipe (`omnitok.versions.apertus_2`) renames the base's `<SPECIAL_*>` pool slots
-in place, reuses the pre-baked `<|image|>`/`<|audio|>`, and appends only content tokens
-(see [Apertus 2 build](#apertus-2-build)).
-
-**Sections:** [How a tokenizer is modified](#how-a-tokenizer-is-modified) ·
-[Extension scripts & flags](#extension-scripts-cli--library) ·
-[Apertus 2 build](#apertus-2-build) ·
-[Tokenizer layout](#tokenizer-layout) ·
-[Token aliases](#token-aliases) ·
-[Known codebook sizes](#known-codebook-sizes)
-
-### How a tokenizer is modified
-
-Extending writes three things into the output tokenizer directory:
-
-1. **Added tokens** — both the per-modality *structure* tokens (`<|img_start|>`, `<|image|>`,
-  `<|audio_start|>`, …) and the *content* tokens (one per codebook entry, e.g.
-   `<|visual token 0|>`) are added as **special added tokens**. Special added tokens are
-   matched verbatim *before* the BPE model runs, so each maps to exactly **one id** and is
-   never split (a plain BPE vocab entry would fragment). Content tokens are one-per-codebook-
-   entry so the model can emit them autoregressively. They are added via
-   `add_special_tokens({"additional_special_tokens": ...})`, which enrolls them in the named
-   role — on current transformers that role is serialized into `special_tokens_map.json` and
-   `all_special_ids`, so a fresh build's map is larger than the shipped 1.5 one
-   (whose clean map is an artifact of the older transformers that built it).
-2. **Modality metadata** — `omnimodal_config` in `tokenizer_config.json`: per-modality
-   content `offset` and `vocab_size` (content ids are contiguous, so id = offset + index)
-   plus start/end token ids. Downstream data pipelines derive the
-   **codebook-index ↔ token-id** contract from it.
-3. **Aliases** — a normalizer rewrite so `<image>`/`<audio>` encode to the same id as
-  `<|image|>`/`<|audio|>` (no manual `.replace()` in data loaders).
-
-
-
-### Extension scripts (CLI & library)
-
-```bash
-python -m omnitok.cli add-modality \
-    --input-tokenizer swiss-ai/Apertus-8B-2509 --output-path ./omni_vision \
-    --modality vision --vocab-size 131072
-python -m omnitok.cli add-modality \
-    --input-tokenizer ./omni_vision --output-path ./omni_vision_audio \
-    --modality audio --vocab-size 4096
-
-# Add instruct (chat template + SFT sequences) on top of an omni tokenizer
-python -m omnitok.cli add-instruct \
-    --base-tokenizer-path ./omni_vision_audio \
-    --instruct-tokenizer-path swiss-ai/Apertus-8B-2509-Instruct \
-    --output-path ./omni_instruct
-```
-
-```python
-from omnitok import add_modality, create_instruct_tokenizer
-
-add_modality("swiss-ai/Apertus-8B-2509", "./omni_vision", "vision", vocab_size=131072)
-add_modality("./omni_vision", "./omni_vision_audio", "audio", vocab_size=4096)
-
-create_instruct_tokenizer("./omni_vision_audio", "swiss-ai/Apertus-8B-2509-Instruct", "./omni_instruct")
-```
-
-`add-modality` flags / Options:
-
-
-| Flag                                    | Description                                                            |
-| --------------------------------------- | ----------------------------------------------------------------------- |
-| `--input-tokenizer` / `--output-path`   | base tokenizer (path or HF id) and where to write the result            |
-| `--modality {vision,audio}`             | which modality to add                                                   |
-| `--vocab-size N`                        | codebook size (number of content tokens)                                |
-| `--num-reserved-tokens N`               | size of the `RESERVED_OMNI` block (default 200)                         |
-| `--extra-config '{"type": "...", ...}'` | modality metadata written under `vision_tokenizer` / `audio_tokenizer`  |
-
-
-`add-instruct` takes `--base-tokenizer-path`, `--instruct-tokenizer-path` (path or HF id of a
-chat-template source), and `--output-path`.
-
-### Apertus 2 build
-
-The Apertus 2 recipe pins the `preliminary_mul_200k` text base (200,064 tokens,
-decided in apertus-program#429) and a hardcoded rename table — the table *is* the
-spec, and the build asserts the base matches it before writing anything:
-
-```bash
-python -m omnitok.cli build-apertus-2 \
-    --input-tokenizer ./preliminary_mul_200k --output-path ./apertus2_omni
-```
-
-| ids | source in base | becomes |
-| ------- | ------------------------ | -------------------------------------------------------------------------------------------- |
-| 18, 19  | `<\|image\|>`, `<\|audio\|>` (pre-baked) | reused as-is; gain the `<image>`/`<audio>` aliases                             |
-| 27-32   | `<SPECIAL_27..32>`       | img_start, img_end, img_token_start, img_end_of_row, img_end_of_frame, img_generation_start   |
-| 33-39   | `<SPECIAL_33..39>`       | audio_start, audio_end, stt_transcribe, stt_continue, tts_continue, stt_translate, audio_annotate |
-| 40-123  | `<SPECIAL_40..123>`      | untouched — banked for future modalities                                                       |
-| 200,064+ | —                       | vision content (131,072), then audio content (4,096); total 335,232                            |
-
-Two deliberate properties of the output: the base's BOS/EOS post-processor is
-stripped (BOS/EOS belong to the chat template — apertus-program#420 — and SFT
-packing needs exact encoding, so `add_special_tokens=True` inserts nothing), and
-content tokens stay out of the `additional_special_tokens` named role, keeping
-`special_tokens_map.json` role-only. The metadata contract is documented in
-[docs/omnimodal_config.md](docs/omnimodal_config.md).
-
-### Tokenizer layout
-
-An omni block is appended above the base text vocab (Apertus 1.0/1.5):
-
-```
-[0 .. base-1]           text tokens (unchanged)
-[base .. base+199]      200 reserved OMNI slots
-  slot 0                  boundary marker (never renamed)
-  slots 1-7               vision structure tokens
-  slots 8-15              audio structure tokens
-  slots 16-199            reserved for future modalities
-[base+200 .. ]          content tokens (appended per modality in order added)
-```
-
-
-| Slots  | Modality | Tokens                                                                                                   |
-| ------ | -------- | -------------------------------------------------------------------------------------------------------- |
-| 0      | --       | `<\|RESERVED_OMNI_000\|>` (boundary)                                                                     |
-| 1-7    | Vision   | img_start, img_end, img_token_start, img_end_of_row, img_end_of_frame, img_generation_start, image       |
-| 8-15   | Audio    | audio_start, audio_end, stt_transcribe, stt_continue, tts_continue, audio, stt_translate, audio_annotate |
-| 16-199 | --       | Reserved                                                                                                 |
-
-### Token aliases
-
-`<image>` and `<|image|>` encode to the same token ID. Same for `<audio>` / `<|audio|>`.
-Handled by the tokenizer's normalizer -- no manual `.replace()` needed in data loaders.
-
-### Known codebook sizes
-
-
-| Tokenizer    | Modality | Codebook Size |
-| ------------ | -------- | ------------- |
-| Emu3.5 (IBQ) | Vision   | 131,072       |
-| Emu3         | Vision   | 32,768        |
-| WavTokenizer | Audio    | 4,096         |
-
-
-
-
-## Repository structure
+## Structure
 
 ```
 apertus-omni-tokenizer/
 ├── README.md
 ├── pyproject.toml
 ├── validate_model.sh        # verify a served model dir matches canonical md5s
-├── docs/
-│   └── omnimodal_config.md  # metadata contract for built tokenizers
 ├── omnitok/
 │   ├── __init__.py      # public API exports
+│   ├── apertus.py       # build_apertus_1p5() -- the Apertus 1 -> 1.5 recipe
 │   ├── modalities.py    # ModalityConfig dataclass, built-in VISION/AUDIO configs
-│   ├── builder.py       # add_modality() / add_modality_in_place() -- the engines
-│   ├── versions/        # per-version build recipes (apertus_1p5, apertus_2)
+│   ├── builder.py       # add_modality() -- modality engine (driven by the recipe)
 │   ├── instruct.py      # create_instruct_tokenizer() -- chat template + SFT sequences
 │   ├── io.py            # low-level file I/O (rename, alias, detect, save)
 │   └── cli.py           # CLI wrapper (python -m omnitok.cli)
 ├── tests/
-│   ├── conftest.py           # shared fixtures
-│   ├── tokenizer_factory.py  # offline WordLevel tokenizer factory for tests
-│   ├── test_alias.py         # token alias tests (<image> == <|image|>)
-│   ├── test_builder.py       # add_modality tests + layout guards
-│   ├── test_instruct.py      # chat-template patching tests
-│   ├── test_chat_template.py # add chat template test
-│   ├── test_task_tokens.py   # task token contract tests
-│   └── test_tokenizers.py    # checked-in tokenizers load + special-token IDs
-├── examples/
-│   └── rename_tool_tokens.py # Script used to add new special tokens in tool calling parsing
+│   ├── conftest.py             # shared fixtures
+│   ├── test_alias.py           # token alias tests (<image> == <|image|>)
+│   ├── test_apertus_recipe.py  # build reproduces the canonical 1.5 byte-for-byte
+│   ├── test_builder.py         # add_modality tests
+│   ├── test_chat_template.py   # add chat template test
+│   ├── test_task_tokens.py     # task token contract tests
+│   └── test_tokenizers.py      # checked-in tokenizers load + special-token IDs
 ├── tokenizers/
 │   ├── Apertus_1/            # Instructed tokenizer used for Apertus 1.0
+│   │   ├── tokenizer.json
+│   │   └── tokenizer_config.json
 │   └── Apertus_1p5/          # Instructed tokenizer used for Apertus 1.5
+│       ├── tokenizer.json
+│       └── tokenizer_config.json
 ├── chat_templates/
-│   ├── Apertus_1/chat_template.jinja      # Chat template used for Apertus 1.0
-│   └── Apertus_1p5/chat_template.jinja    # Chat template used for Apertus 1.5
+│   ├── Apertus_1/            # Chat template used for Apertus 1.0
+│   │   └── chat_template.jinja
+│   └── Apertus_1p5/          # Chat template used for Apertus 1.5
+│       └── chat_template.jinja
 └── validation/
     ├── gen_checksums.sh      # regenerate the manifests below
     ├── Apertus_1.md5         # canonical md5s for the 1.0 tokenizer
@@ -247,5 +166,4 @@ Adding a new modality = one new `ModalityConfig` entry in `modalities.py`.
 
 ## Author
 
-Yixuan Xu ([yixuan.xu@ai.ethz.ch](mailto:yixuan.xu@ai.ethz.ch))
-Raphael Kreft ([rkreft@ai.ethz.ch](mailto:rkreft@ai.ethz.ch))
+Yixuan Xu (yixuan.xu@ai.ethz.ch)

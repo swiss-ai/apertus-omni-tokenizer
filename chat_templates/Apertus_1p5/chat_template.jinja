@@ -219,6 +219,18 @@
                         {{- raise_exception("Invalid user part: " + part.type) -}}
                     {%- endif -%}
                 {%- endfor -%}
+            {%- elif message.content is not string and message.content is not mapping and message.content is iterable -%}
+                {%- for part in message.content -%}
+                    {%- if part.type == "text" -%}
+                        {{ part.text }}
+                    {%- elif part.type == "image" or part.type == "image_url" or part.type == "input_image" -%}
+                        {{ image_token }}
+                    {%- elif part.type == "audio" or part.type == "audio_url" or part.type == "input_audio" -%}
+                        {{ audio_token }}
+                    {%- else -%}
+                        {{- raise_exception("Invalid user part: " + part.type) -}}
+                    {%- endif -%}
+                {%- endfor -%}
             {%- else -%}
                 {{- raise_exception("Invalid user message: " + message.role) -}}
             {%- endif -%}
