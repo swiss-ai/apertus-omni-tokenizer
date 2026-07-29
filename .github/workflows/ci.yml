@@ -16,8 +16,8 @@ jobs:
           python-version: "3.11"
       - uses: pre-commit/action@v3.0.1
 
-  chat-template-tests:
-    name: Chat template tests
+  tests:
+    name: Full test suite (incl. byte-identical 1.5 rebuild)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,38 +28,8 @@ jobs:
 
       - run: pip install -e ".[dev]"
 
-      - name: Run chat template tests
-        run: pytest tests/test_chat_template.py -v
-
-  tokenizer-tests:
-    name: Tokenizer load + round-trip tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - run: pip install -e ".[dev]"
-
-      - name: Run tokenizer tests
-        run: pytest tests/test_tokenizers.py -v
-
-  reproduction:
-    name: Rebuild Apertus 1.5 from Apertus 1 (byte-identical)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - run: pip install -e ".[dev]"
-
-      - name: Build 1.5 from the checked-in base and compare to the manifest
-        run: pytest tests/test_apertus_recipe.py -v
+      - name: Run all tests
+        run: pytest tests/ -v
 
   checksum-manifests:
     name: Checksum manifests up to date
