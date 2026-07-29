@@ -207,13 +207,12 @@ class TestReasoningAliases:
 
     @staticmethod
     def _base(tmp_path):
-        backend = Tokenizer(models.WordLevel({"<unk>": 0, "hi": 1}, unk_token="<unk>"))
-        tok = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="<unk>")
-        tok.add_tokens(
-            [
+        tok = make_word_level_tokenizer(
+            ("<unk>", "hi"),
+            added_tokens=[
                 AddedToken("<|inner_prefix|>", special=False, normalized=False),
                 AddedToken("<|inner_suffix|>", special=False, normalized=False),
-            ]
+            ],
         )
         out = str(tmp_path / "base")
         tok.save_pretrained(out)
@@ -261,8 +260,7 @@ class TestReasoningAliases:
             assert len(json.load(f)["normalizer"]["normalizers"]) == n_rules
 
     def test_missing_delimiter_raises(self, tmp_path):
-        backend = Tokenizer(models.WordLevel({"<unk>": 0}, unk_token="<unk>"))
-        tok = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="<unk>")
+        tok = make_word_level_tokenizer()
         out = str(tmp_path / "bare")
         tok.save_pretrained(out)
         with pytest.raises(ValueError, match="not an added token"):

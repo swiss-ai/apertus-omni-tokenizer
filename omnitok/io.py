@@ -473,11 +473,18 @@ def detect_existing_modalities(tokenizer_path: str) -> dict[str, Any]:
 # ── Omnimodal config ──────────────────────────────────────────────────────────
 
 
-def read_modality_info(mc: ModalityConfig, vocab: dict[str, int]) -> dict[str, Any] | None:
+def read_modality_info(
+    mc: ModalityConfig,
+    vocab: dict[str, int],
+    *,
+    publish_structure_ids: bool = False,
+) -> dict[str, Any] | None:
     """Derive a single modality's summary from the tokenizer vocabulary.
 
     Returns {name, offset, vocab_size, start_token, end_token} or None
     if the modality's content or structure tokens are not in the vocabulary.
+    ``publish_structure_ids`` adds the structure_token_ids map; the Apertus
+    1.5 artifact predates that field, so it stays off unless a recipe asks.
     Walks the content tokens from index 0, verifying id = offset + index as it counts them —
     every config this feeds is only written for contiguous ids,
     which is what lets consumers look tokens up by offset arithmetic.
@@ -508,24 +515,28 @@ def read_modality_info(mc: ModalityConfig, vocab: dict[str, int]) -> dict[str, A
             f"{count} are contiguous from index 0"
         )
 
-    return {
+    info = {
         "name": mc.name,
         "offset": offset,
         "vocab_size": count,
         "start_token": start_id,
         "end_token": end_id,
-        "structure_token_ids": {
+    }
+    if publish_structure_ids:
+        info["structure_token_ids"] = {
             r.target_name: vocab[r.target_name]
             for r in mc.structure_tokens
             if r.target_name in vocab
-        },
-    }
+        }
+    return info
 
 
 def build_omnimodal_config(
     base_vocab_size: int,
     tokenizer,
     registry: dict[str, ModalityConfig] | None = None,
+    *,
+    publish_structure_ids: bool = False,
 ) -> dict[str, Any]:
     """Build omnimodal_config for every registered modality present in the tokenizer.
 
@@ -548,7 +559,9 @@ def build_omnimodal_config(
     modalities = [
         info
         for mc in registry.values()
-        if (info := read_modality_info(mc, vocab)) is not None
+        if (info := read_modality_info(
+            mc, vocab, publish_structure_ids=publish_structure_ids
+        )) is not None
     ]
 
     if not modalities:
