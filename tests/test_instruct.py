@@ -11,15 +11,8 @@ from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
 from omnitok.instruct import (
     _patch_apertus_chat_template,
-    _patch_llama_chat_template,
     create_instruct_tokenizer,
 )
-
-LLAMA_TEMPLATE = """{{- bos_token }}
-{%- for message in messages %}
-    {{- '<|start_header_id|>' + message['role'] + '<|end_header_id|>\\n\\n'+ message['content'] | trim + '<|eot_id|>' }}
-{%- endfor %}
-"""
 
 APERTUS_TEMPLATE = """{{ bos_token }}
 {%- set user_token = '<|user_start|>' -%}
@@ -59,9 +52,6 @@ def _make_tokenizer(chat_template: str | None = None) -> PreTrainedTokenizerFast
         "<|audio_start|>",
         "<|audio_end|>",
         "<|image|>",
-        "<|start_header_id|>user<|end_header_id|>",
-        "<|start_header_id|>assistant<|end_header_id|>",
-        "<|eot_id|>",
         "<|user_start|>",
         "<|assistant_start|>",
         "<|assistant_end|>",
@@ -115,24 +105,6 @@ def _write_omnimodal_config(path) -> None:
 
 
 class TestTemplatePatching:
-    def test_llama_patch_renders_audio_blocks(self):
-        tokenizer = _make_tokenizer(_patch_llama_chat_template(LLAMA_TEMPLATE))
-        rendered = tokenizer.apply_chat_template(
-            [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "audio"},
-                        {"type": "text", "text": "Transcribe this clip."},
-                    ],
-                }
-            ],
-            tokenize=False,
-        )
-
-        assert "<|audio|>" in rendered
-        assert "Transcribe this clip." in rendered
-
     def test_apertus_patch_renders_audio_parts(self):
         tokenizer = _make_tokenizer(_patch_apertus_chat_template(APERTUS_TEMPLATE))
         rendered = tokenizer.apply_chat_template(

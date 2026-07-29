@@ -17,65 +17,6 @@ from .io import _resolve_tokenizer_path, detect_existing_modalities
 from .modalities import MODALITY_REGISTRY
 
 
-_LLAMA_MULTIMODAL_RENDERER = """{%- macro render_content(content) -%}
-    {%- if content is string -%}
-        {{- content | trim -}}
-    {%- elif content is sequence -%}
-        {%- for item in content -%}
-            {%- if item is string -%}
-                {{- item | trim -}}
-            {%- elif item is mapping -%}
-                {%- if item.type == "text" -%}
-                    {{- item.text | trim -}}
-                {%- elif item.type == "image" or item.type == "image_url" or item.type == "input_image" -%}
-                    {{- "<|image|>" -}}
-                {%- elif item.type == "audio" or item.type == "audio_url" or item.type == "input_audio" -%}
-                    {{- "<|audio|>" -}}
-                {%- else -%}
-                    {{- raise_exception("Invalid content item: " + item.type) -}}
-                {%- endif -%}
-            {%- else -%}
-                {{- raise_exception("Invalid content item") -}}
-            {%- endif -%}
-            {%- if not loop.last -%}
-                {{- "\\n" -}}
-            {%- endif -%}
-        {%- endfor -%}
-    {%- else -%}
-        {{- raise_exception("Invalid message content") -}}
-    {%- endif -%}
-{%- endmacro -%}"""
-
-
-def _patch_llama_chat_template(chat_template: str) -> str:
-    """Teach LLaMA-style templates to render structured image/audio blocks."""
-    if "macro render_content(content)" in chat_template:
-        return chat_template
-
-    replacements = (
-        ("messages[0]['content']|trim", "render_content(messages[0]['content'])"),
-        ("messages[0]['content'] | trim", "render_content(messages[0]['content'])"),
-        ('messages[0]["content"]|trim', 'render_content(messages[0]["content"])'),
-        ('messages[0]["content"] | trim', 'render_content(messages[0]["content"])'),
-        ("message['content']|trim", "render_content(message['content'])"),
-        ("message['content'] | trim", "render_content(message['content'])"),
-        ('message["content"]|trim', 'render_content(message["content"])'),
-        ('message["content"] | trim', 'render_content(message["content"])'),
-    )
-
-    patched = chat_template
-    replaced = False
-    for old, new in replacements:
-        if old in patched:
-            patched = patched.replace(old, new)
-            replaced = True
-
-    if not replaced:
-        return chat_template
-
-    return _LLAMA_MULTIMODAL_RENDERER + "\n\n" + patched
-
-
 _APERTUS_OMNI_SYSTEM_PROMPT = (
     "You are Apertus 1.5 Omni, a multimodal assistant developed by the "
     "Swiss AI Initiative. Extended from Apertus 1 via continued "
@@ -210,23 +151,13 @@ def create_instruct_tokenizer(
         "modalities": list(existing["modalities"].keys()),
     }
 
-    # Detect chat template style and add SFT sequences
-    if "<|start_header_id|>" in chat_template:
-        chat_template = _patch_llama_chat_template(chat_template)
-        user_header = "<|start_header_id|>user<|end_header_id|>"
-        assistant_header = "<|start_header_id|>assistant<|end_header_id|>"
-        eot_token = "<|eot_id|>"
-        print("Detected LLaMA-3 style chat template")
-    elif "<|user_start|>" in chat_template:
-        chat_template = _patch_apertus_chat_template(chat_template)
-        user_header = "<|user_start|>"
-        assistant_header = "<|assistant_start|>"
-        eot_token = "<|assistant_end|>"
-        print("Detected Apertus style chat template")
-    else:
-        raise ValueError(
-            "Unsupported chat template. Supported: LLaMA-3, Apertus."
-        )
+    # Patch the Apertus chat template and add SFT sequences
+    if "<|user_start|>" not in chat_template:
+        raise ValueError("Unsupported chat template. Supported: Apertus.")
+    chat_template = _patch_apertus_chat_template(chat_template)
+    user_header = "<|user_start|>"
+    assistant_header = "<|assistant_start|>"
+    eot_token = "<|assistant_end|>"
 
     config["chat_template"] = chat_template
 
