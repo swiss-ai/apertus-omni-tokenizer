@@ -17,60 +17,6 @@ from .io import _resolve_tokenizer_path, detect_existing_modalities
 from .modalities import MODALITY_REGISTRY
 
 
-_APERTUS_OMNI_SYSTEM_PROMPT = (
-    "You are Apertus 1.5 Omni, a multimodal assistant developed by the "
-    "Swiss AI Initiative. Extended from Apertus 1 via continued "
-    "pretraining, you understand images and audio and respond in text."
-)
-
-
-def _patch_apertus_chat_template(chat_template: str) -> str:
-    """Extend Apertus chat template for omni SFT.
-
-    - Adds audio rendering to user content parts.
-    - Replaces the default no-system-message fallback with a static
-      omni-aware system prompt. Drops the dynamic ``strftime_now`` call
-      and the stale ``Knowledge cutoff`` line so that samples without an
-      explicit system message render deterministically across training
-      runs. Explicit system messages in data are still honored.
-    """
-    if "audio_token = '<|audio|>'" in chat_template:
-        return chat_template
-
-    patched = chat_template
-    image_token_line = "{%- set image_token = '<|image|>' -%}"
-    if image_token_line in patched:
-        patched = patched.replace(
-            image_token_line,
-            image_token_line + "\n{%- set audio_token = '<|audio|>' -%}",
-            1,
-        )
-
-    image_branch = """{%- elif part.type == "image" -%}
-                        {{ image_token }}
-                    {%- else -%}
-                        {{- raise_exception("Invalid user part: " + part.type) -}}
-                    {%- endif -%}"""
-    audio_branch = """{%- elif part.type == "image" or part.type == "image_url" or part.type == "input_image" -%}
-                        {{ image_token }}
-                    {%- elif part.type == "audio" or part.type == "audio_url" or part.type == "input_audio" -%}
-                        {{ audio_token }}
-                    {%- else -%}
-                        {{- raise_exception("Invalid user part: " + part.type) -}}
-                    {%- endif -%}"""
-    patched = patched.replace(image_branch, audio_branch, 1)
-
-    old_default_expr = (
-        "'You are Apertus, a helpful assistant created by the SwissAI "
-        "initiative.\\nKnowledge cutoff: 2024-04\\nCurrent date: ' "
-        "+ strftime_now('%Y-%m-%d')"
-    )
-    new_default_expr = "'" + _APERTUS_OMNI_SYSTEM_PROMPT + "'"
-    patched = patched.replace(old_default_expr, new_default_expr, 1)
-
-    return patched
-
-
 def create_instruct_tokenizer(
     base_tokenizer_path: str,
     instruct_tokenizer_path: str | None,
@@ -151,10 +97,26 @@ def create_instruct_tokenizer(
         "modalities": list(existing["modalities"].keys()),
     }
 
-    # Patch the Apertus chat template and add SFT sequences
+    # The template is consumed verbatim: the checked-in jinja under
+    # chat_templates/ is the hand-maintained ground truth, never rewritten
+    # at build time.
     if "<|user_start|>" not in chat_template:
         raise ValueError("Unsupported chat template. Supported: Apertus.")
-    chat_template = _patch_apertus_chat_template(chat_template)
+    # Since nothing is injected, every modality the tokenizer carries must be
+    # renderable by the template as given: its content placeholder (the
+    # aliased structure token, e.g. <|image|>, <|audio|>) has to appear.
+    for name in existing["modalities"]:
+        modality = MODALITY_REGISTRY.get(name)
+        if modality is None:
+            continue
+        placeholder = next(
+            (t.target_name for t in modality.structure_tokens if t.alias), None
+        )
+        if placeholder is not None and placeholder not in chat_template:
+            raise ValueError(
+                f"Chat template does not reference {placeholder}; it cannot "
+                f"render {name} content."
+            )
     user_header = "<|user_start|>"
     assistant_header = "<|assistant_start|>"
     eot_token = "<|assistant_end|>"

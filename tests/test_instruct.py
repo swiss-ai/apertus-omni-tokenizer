@@ -4,20 +4,19 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import Whitespace
 from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
-from omnitok.instruct import (
-    _patch_apertus_chat_template,
-    create_instruct_tokenizer,
-)
+from omnitok.instruct import create_instruct_tokenizer
 
 APERTUS_TEMPLATE = """{{ bos_token }}
 {%- set user_token = '<|user_start|>' -%}
 {%- set end_user_token = '<|user_end|>' -%}
 {%- set image_token = '<|image|>' -%}
+{%- set audio_token = '<|audio|>' -%}
 {%- for message in messages -%}
     {%- if message.role == 'user' -%}
         {%- if "content" in message -%}
@@ -31,6 +30,8 @@ APERTUS_TEMPLATE = """{{ bos_token }}
                         {{ part.text }}
                     {%- elif part.type == "image" -%}
                         {{ image_token }}
+                    {%- elif part.type == "audio" -%}
+                        {{ audio_token }}
                     {%- else -%}
                         {{- raise_exception("Invalid user part: " + part.type) -}}
                     {%- endif -%}
@@ -104,26 +105,21 @@ def _write_omnimodal_config(path) -> None:
         json.dump(config, f, indent=2)
 
 
-class TestTemplatePatching:
-    def test_apertus_patch_renders_audio_parts(self):
-        tokenizer = _make_tokenizer(_patch_apertus_chat_template(APERTUS_TEMPLATE))
-        rendered = tokenizer.apply_chat_template(
-            [
-                {
-                    "role": "user",
-                    "content": {
-                        "parts": [
-                            {"type": "audio"},
-                            {"type": "text", "text": "Transcribe this clip."},
-                        ]
-                    },
-                }
-            ],
-            tokenize=False,
-        )
+def test_template_missing_modality_placeholder_rejected(tmp_path):
+    """A template that cannot render a modality the tokenizer carries fails
+    the build instead of shipping silently."""
+    base_dir = tmp_path / "base"
+    instruct_dir = tmp_path / "instruct"
 
-        assert "<|audio|>" in rendered
-        assert "Transcribe this clip." in rendered
+    _save_tokenizer(base_dir)
+    _write_omnimodal_config(base_dir)
+    text_only = "{{ bos_token }}<|user_start|>{{ messages[0].content }}<|user_end|>"
+    _save_tokenizer(instruct_dir, text_only)
+
+    with pytest.raises(ValueError, match="cannot render audio"):
+        create_instruct_tokenizer(
+            str(base_dir), str(instruct_dir), str(tmp_path / "out")
+        )
 
 
 def test_create_instruct_tokenizer_saves_audio_aware_chat_template(tmp_path):
