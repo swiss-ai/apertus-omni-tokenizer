@@ -253,20 +253,8 @@ def add_token_alias(
     print(f"  Added alias {alias} -> {token}")
 
 
-# Reasoning-delimiter tokens across both known tokenizer schemes. The canonical
-# repo build carries <|inner_prefix|>/<|inner_suffix|> at the emitted ids; some
-# deployed builds register <think>/</think> there instead. We flip whichever are
-# present, so this is safe to run on either scheme (apertus-omni-tokenizer #5).
-REASONING_DELIMITER_TOKENS = (
-    "<|inner_prefix|>",
-    "<|inner_suffix|>",
-    "<think>",
-    "</think>",
-)
-
-
 def mark_tokens_non_special(
-    save_path: str, tokens: tuple[str, ...] = REASONING_DELIMITER_TOKENS
+    save_path: str, tokens: tuple[str, ...]
 ) -> list[str]:
     """Flip ``special`` to ``false`` for ``tokens`` in the saved tokenizer files.
 

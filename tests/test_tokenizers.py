@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 from transformers import AutoTokenizer
 
+from omnitok.apertus import REASONING_DELIMITER_TOKENS
 from omnitok.io import mark_tokens_non_special
 
 TOKENIZERS_DIR = Path(__file__).resolve().parent.parent / "tokenizers"
@@ -176,7 +177,7 @@ def test_mark_tokens_non_special_flips_and_is_idempotent(tmp_path):
     (tmp_path / "tokenizer.json").write_text(json.dumps(tj, indent=2))
     (tmp_path / "tokenizer_config.json").write_text(json.dumps(tc, indent=2))
 
-    flipped = mark_tokens_non_special(str(tmp_path))
+    flipped = mark_tokens_non_special(str(tmp_path), REASONING_DELIMITER_TOKENS)
     assert flipped == ["<|inner_prefix|>", "<|inner_suffix|>"]
 
     out_tj = json.loads((tmp_path / "tokenizer.json").read_text())
@@ -188,7 +189,7 @@ def test_mark_tokens_non_special_flips_and_is_idempotent(tmp_path):
     assert out_tc["added_tokens_decoder"]["33"]["special"] is False
 
     # Idempotent: nothing left to flip on a second run.
-    assert mark_tokens_non_special(str(tmp_path)) == []
+    assert mark_tokens_non_special(str(tmp_path), REASONING_DELIMITER_TOKENS) == []
 
 
 def test_mark_tokens_non_special_updates_special_tokens_map(tmp_path):
@@ -201,14 +202,14 @@ def test_mark_tokens_non_special_updates_special_tokens_map(tmp_path):
         "additional_special_tokens": ["<|inner_prefix|>", "<|keep_me|>"]
     }))
 
-    flipped = mark_tokens_non_special(str(tmp_path))
+    flipped = mark_tokens_non_special(str(tmp_path), REASONING_DELIMITER_TOKENS)
 
     # Reports the one present delimiter, NOT <|inner_suffix|>/<think>/</think>.
     assert flipped == ["<|inner_prefix|>"]
     stm = json.loads((tmp_path / "special_tokens_map.json").read_text())
     assert stm["additional_special_tokens"] == ["<|keep_me|>"]
     # Idempotent: nothing left to remove.
-    assert mark_tokens_non_special(str(tmp_path)) == []
+    assert mark_tokens_non_special(str(tmp_path), REASONING_DELIMITER_TOKENS) == []
 
 
 def test_mark_tokens_non_special_log_distinguishes_absent_from_already_fixed(
@@ -221,14 +222,14 @@ def test_mark_tokens_non_special_log_distinguishes_absent_from_already_fixed(
     (tmp_path / "tokenizer.json").write_text(json.dumps({
         "added_tokens": [{"id": 32, "content": "<|inner_prefix|>", "special": False}]
     }))
-    assert mark_tokens_non_special(str(tmp_path)) == []
+    assert mark_tokens_non_special(str(tmp_path), REASONING_DELIMITER_TOKENS) == []
     out = capsys.readouterr().out
     assert "already non-special" in out
     assert "No reasoning delimiters found" not in out
 
     # Genuinely absent -> "not found".
     (tmp_path / "tokenizer.json").write_text(json.dumps({"added_tokens": []}))
-    assert mark_tokens_non_special(str(tmp_path)) == []
+    assert mark_tokens_non_special(str(tmp_path), REASONING_DELIMITER_TOKENS) == []
     assert "No reasoning delimiters found" in capsys.readouterr().out
 
 
@@ -258,7 +259,7 @@ def test_mark_tokens_non_special_ignores_non_added_token_refs_and_key_order(
     }
     (tmp_path / "tokenizer.json").write_text(json.dumps(tj, indent=2))
 
-    flipped = mark_tokens_non_special(str(tmp_path))
+    flipped = mark_tokens_non_special(str(tmp_path), REASONING_DELIMITER_TOKENS)
 
     # inner_suffix flips despite reversed key order; inner_prefix is untouched
     # and not even reported "present" (it only appears in the Replace rule).
