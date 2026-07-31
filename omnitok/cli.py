@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 
 
 def cmd_add_modality(args: argparse.Namespace) -> None:
@@ -90,7 +89,7 @@ def main() -> None:
     )
     p_add.set_defaults(func=cmd_add_modality)
 
-    # ── build-apertus-2 ───────────────────────────────────────────────────
+    # ── build-apertus-1p5 ───────────────────────────────────────────────────
     from .apertus import BASE_REPO, BASE_REVISION
 
     p_v15 = sub.add_parser(
@@ -109,6 +108,7 @@ def main() -> None:
                        help="Keep intermediate stage directories here instead of a tempdir.")
     p_v15.set_defaults(func=cmd_build_apertus_1p5)
 
+    # ── build-apertus-2 ─────────────────────────────────────────────────
     p_v2 = sub.add_parser(
         "build-apertus-2",
         help="Build the Apertus 2 omni tokenizer from the pinned text base.",

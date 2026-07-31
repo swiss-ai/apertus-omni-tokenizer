@@ -10,10 +10,13 @@ and documents the chat templates and canonical tokenizer files for both releases
 
 ```bash
 # From the pinned canonical base on the Hub
-python -m omnitok.cli --output-path ./Apertus_1p5
+python -m omnitok.cli build-apertus-1p5 --output-path ./Apertus_1p5
 
 # Offline, from the checked-in copy of the base
-python -m omnitok.cli --output-path ./Apertus_1p5 --base-tokenizer tokenizers/Apertus_1
+python -m omnitok.cli build-apertus-1p5 --output-path ./Apertus_1p5 --base-tokenizer tokenizers/Apertus_1
+
+# Apertus 2: rename the base's pre-baked <SPECIAL_*> pool in place, append content
+python -m omnitok.cli build-apertus-2 --input-tokenizer <base> --output-path ./Apertus_2
 ```
 
 Or as a library:
@@ -132,7 +135,8 @@ apertus-omni-tokenizer/
 │   ├── __init__.py      # public API exports
 │   ├── apertus.py       # build_apertus_1p5() -- the Apertus 1 -> 1.5 recipe
 │   ├── modalities.py    # ModalityConfig dataclass, built-in VISION/AUDIO configs
-│   ├── builder.py       # add_modality() -- modality engine (driven by the recipe)
+│   ├── builder.py       # add_modality() / add_modality_in_place() -- modality engine
+│   ├── versions/        # per-model recipes (apertus_2.py)
 │   ├── instruct.py      # create_instruct_tokenizer() -- chat template + SFT sequences
 │   ├── io.py            # low-level file I/O (rename, alias, detect, save)
 │   └── cli.py           # CLI wrapper (python -m omnitok.cli)
