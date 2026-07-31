@@ -66,7 +66,7 @@ def create_instruct_tokenizer(
     if chat_template_file is not None:
         with open(chat_template_file, "r", encoding="utf-8") as f:
             chat_template = f.read()
-        if not chat_template:
+        if not chat_template.strip():
             raise ValueError(f"Chat template file {chat_template_file} is empty.")
     else:
         instruct_tokenizer_path = _resolve_tokenizer_path(
