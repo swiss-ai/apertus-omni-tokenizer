@@ -1,7 +1,10 @@
-"""The single engine for adding modalities to tokenizers.
+"""The modality engine: adds vision/audio tokens to any text tokenizer.
 
-Replaces both create_base_tokenizer (vision) and add_audio_tokens (audio)
-with one modality-agnostic function.
+Two entry points for the two allocation strategies, both converging on the
+shared _assemble tail:
+
+    add_modality           append a RESERVED_OMNI pool, rename it, append content
+    add_modality_in_place  rename a pre-baked <SPECIAL_*> pool, append content
 """
 
 from __future__ import annotations
@@ -81,16 +84,9 @@ def add_modality(
     print(f"Current vocab size: {current_vocab_size:,}")
     print(f"Base vocab size (text-only): {base_vocab_size:,}")
 
-    stats = {
-        "input_tokenizer": input_tokenizer_path,
-        "modality": mc.name,
-        "base_vocab_size": base_vocab_size,
-        "original_vocab_size": current_vocab_size,
-        "reserved_tokens_added": 0,
-        "content_tokens_added": 0,
-        "final_vocab_size": 0,
-        "existing_modalities": list(existing["modalities"].keys()),
-    }
+    stats = _init_stats(input_tokenizer_path, mc, base_vocab_size,
+                        current_vocab_size, existing)
+    stats["reserved_tokens_added"] = 0
 
     # Idempotency check
     if mc.name in existing["modalities"]:
@@ -202,16 +198,8 @@ def add_modality_in_place(
     _strip_post_processor(tokenizer)
     _assert_in_place_base(tokenizer, renames, reused_ids)
 
-    stats = {
-        "input_tokenizer": input_tokenizer_path,
-        "modality": mc.name,
-        "base_vocab_size": base_vocab_size,
-        "original_vocab_size": len(tokenizer),
-        "reserved_tokens_added": 0,
-        "content_tokens_added": 0,
-        "final_vocab_size": 0,
-        "existing_modalities": list(existing["modalities"].keys()),
-    }
+    stats = _init_stats(input_tokenizer_path, mc, base_vocab_size,
+                        len(tokenizer), existing)
 
     content = _collect_content_tokens(tokenizer.get_vocab(), vocab_size, mc)
     stats["content_tokens_added"] = len(content)
@@ -232,23 +220,39 @@ def add_modality_in_place(
 # ── Private helpers ──────────────────────────────────────────────────────────
 
 
+def _init_stats(input_tokenizer_path, mc, base_vocab_size, original_vocab_size,
+                existing) -> dict[str, Any]:
+    """The stats skeleton both entry points fill in as they go."""
+    return {
+        "input_tokenizer": input_tokenizer_path,
+        "modality": mc.name,
+        "base_vocab_size": base_vocab_size,
+        "original_vocab_size": original_vocab_size,
+        "content_tokens_added": 0,
+        "final_vocab_size": 0,
+        "existing_modalities": list(existing["modalities"].keys()),
+    }
+
+
 def _strip_post_processor(tokenizer) -> None:
     """Drop the base's BOS/EOS-injecting post-processor.
 
     BOS is template-owned and nothing may auto-append EOS to prompts
-    (apertus-program#420); SFT packing needs exact encoding.
-    Refuses post-processor shapes it does not recognize.
+    (apertus-program#420); SFT packing needs exact encoding. Refuses shapes
+    it does not recognize: only a TemplateProcessing over this tokenizer's
+    own declared bos/eos is safe to drop.
     """
-    state = json.loads(tokenizer.backend_tokenizer.to_str())
-    pp = state.get("post_processor")
+    backend = tokenizer.backend_tokenizer
+    pp = backend.post_processor
     if pp is None:
         return
-    if pp.get("type") != "TemplateProcessing" or not (
-        set(pp.get("special_tokens", {})) <= {"<s>", "</s>"}
+    declared = {tokenizer.bos_token, tokenizer.eos_token} - {None}
+    state = json.loads(pp.__getstate__())
+    if state.get("type") != "TemplateProcessing" or not (
+        set(state.get("special_tokens", {})) <= declared
     ):
-        raise ValueError(f"unrecognized base post-processor: {pp.get('type')}")
-    state["post_processor"] = None
-    tokenizer._tokenizer = Tokenizer.from_str(json.dumps(state))
+        raise ValueError(f"unrecognized base post-processor: {state.get('type')}")
+    backend.post_processor = None
     print("Stripped base BOS/EOS post-processor (specials are template-owned)")
 
 

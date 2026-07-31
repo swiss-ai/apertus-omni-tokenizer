@@ -13,12 +13,14 @@ def make_word_level_tokenizer(
     whitespace=False,
     bos_eos=False,
     added_tokens=None,
+    added_special=False,
     chat_template=None,
 ):
     """Build a tiny offline WordLevel tokenizer.
 
     vocab_tokens become the base model vocab (ids 0..n-1, <unk> required);
-    added_tokens layer on via add_tokens (str or AddedToken).
+    added_tokens layer on via add_tokens (str or AddedToken), marked special
+    when added_special is set.
     """
     tokens = list(vocab_tokens)
     if bos_eos:
@@ -35,7 +37,7 @@ def make_word_level_tokenizer(
         roles.update(bos_token="<s>", eos_token="</s>")
     tok = PreTrainedTokenizerFast(tokenizer_object=backend, **roles)
     if added_tokens:
-        tok.add_tokens(list(added_tokens))
+        tok.add_tokens(list(added_tokens), special_tokens=added_special)
     if chat_template is not None:
         tok.chat_template = chat_template
     return tok
