@@ -355,6 +355,71 @@ def mark_tokens_non_special(
 # ── Tokenizer config ─────────────────────────────────────────────────────────
 
 
+def dump_canonical_json(obj: dict[str, Any], path: str) -> None:
+    """transformers-style deterministic JSON: sorted keys, indent 2, LF tail."""
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(obj, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
+
+
+_SPECIAL_TOKEN_ROLES = ("bos_token", "eos_token", "pad_token", "unk_token")
+
+
+def finalize_tokenizer_config(
+    save_path: str,
+    *,
+    carried_keys: Sequence[str],
+    overrides: dict[str, Any],
+    require_chat_template: bool = False,
+) -> dict[str, Any]:
+    """Rewrite the saved config into its canonical, version-independent form.
+
+    ``save_pretrained`` emits whatever shape the running transformers prefers.
+    5.x writes a TokenizersBackend class plus fossils that 4.x cannot load;
+    4.x mirrors every added token into ``added_tokens_decoder``.
+    An allowlist plus explicit overrides ties the output to the recipe,
+    not to the build environment.
+
+    Writes chat_template.jinja only if the built config carries a template;
+    set ``require_chat_template`` where its absence means the instruct stage
+    silently did not run.
+    Rewrites special_tokens_map.json from whichever role tokens are present.
+
+    Returns the config that was written.
+    """
+    config_path = os.path.join(save_path, "tokenizer_config.json")
+    with open(config_path, "r", encoding="utf-8") as f:
+        built = json.load(f)
+
+    chat_template = built.pop("chat_template", None)
+    if chat_template is None:
+        if require_chat_template:
+            raise ValueError("Pipeline did not produce a chat template.")
+    else:
+        with open(os.path.join(save_path, "chat_template.jinja"), "w",
+                  encoding="utf-8") as f:
+            f.write(chat_template)
+
+    config = {key: built[key] for key in carried_keys}
+    config.update(overrides)
+    dump_canonical_json(config, config_path)
+
+    dump_canonical_json(
+        {
+            name: {
+                "content": config[name],
+                "lstrip": False,
+                "normalized": False,
+                "rstrip": False,
+                "single_word": False,
+            }
+            for name in _SPECIAL_TOKEN_ROLES
+            if name in config
+        },
+        os.path.join(save_path, "special_tokens_map.json"),
+    )
+    return config
+
+
 def write_tokenizer_config(
     save_path: str,
     tokenizer,
