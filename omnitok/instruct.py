@@ -13,138 +13,38 @@ from typing import Any
 
 from transformers import AutoTokenizer
 
-from .io import detect_existing_modalities
+from .io import _resolve_tokenizer_path, detect_existing_modalities
 from .modalities import MODALITY_REGISTRY
-
-
-_LLAMA_MULTIMODAL_RENDERER = """{%- macro render_content(content) -%}
-    {%- if content is string -%}
-        {{- content | trim -}}
-    {%- elif content is sequence -%}
-        {%- for item in content -%}
-            {%- if item is string -%}
-                {{- item | trim -}}
-            {%- elif item is mapping -%}
-                {%- if item.type == "text" -%}
-                    {{- item.text | trim -}}
-                {%- elif item.type == "image" or item.type == "image_url" or item.type == "input_image" -%}
-                    {{- "<|image|>" -}}
-                {%- elif item.type == "audio" or item.type == "audio_url" or item.type == "input_audio" -%}
-                    {{- "<|audio|>" -}}
-                {%- else -%}
-                    {{- raise_exception("Invalid content item: " + item.type) -}}
-                {%- endif -%}
-            {%- else -%}
-                {{- raise_exception("Invalid content item") -}}
-            {%- endif -%}
-            {%- if not loop.last -%}
-                {{- "\\n" -}}
-            {%- endif -%}
-        {%- endfor -%}
-    {%- else -%}
-        {{- raise_exception("Invalid message content") -}}
-    {%- endif -%}
-{%- endmacro -%}"""
-
-
-def _patch_llama_chat_template(chat_template: str) -> str:
-    """Teach LLaMA-style templates to render structured image/audio blocks."""
-    if "macro render_content(content)" in chat_template:
-        return chat_template
-
-    replacements = (
-        ("messages[0]['content']|trim", "render_content(messages[0]['content'])"),
-        ("messages[0]['content'] | trim", "render_content(messages[0]['content'])"),
-        ('messages[0]["content"]|trim', 'render_content(messages[0]["content"])'),
-        ('messages[0]["content"] | trim', 'render_content(messages[0]["content"])'),
-        ("message['content']|trim", "render_content(message['content'])"),
-        ("message['content'] | trim", "render_content(message['content'])"),
-        ('message["content"]|trim', 'render_content(message["content"])'),
-        ('message["content"] | trim', 'render_content(message["content"])'),
-    )
-
-    patched = chat_template
-    replaced = False
-    for old, new in replacements:
-        if old in patched:
-            patched = patched.replace(old, new)
-            replaced = True
-
-    if not replaced:
-        return chat_template
-
-    return _LLAMA_MULTIMODAL_RENDERER + "\n\n" + patched
-
-
-_APERTUS_OMNI_SYSTEM_PROMPT = (
-    "You are Apertus 1.5 Omni, a multimodal assistant developed by the "
-    "Swiss AI Initiative. Extended from Apertus 1 via continued "
-    "pretraining, you understand images and audio and respond in text."
-)
-
-
-def _patch_apertus_chat_template(chat_template: str) -> str:
-    """Extend Apertus chat template for omni SFT.
-
-    - Adds audio rendering to user content parts.
-    - Replaces the default no-system-message fallback with a static
-      omni-aware system prompt. Drops the dynamic ``strftime_now`` call
-      and the stale ``Knowledge cutoff`` line so that samples without an
-      explicit system message render deterministically across training
-      runs. Explicit system messages in data are still honored.
-    """
-    if "audio_token = '<|audio|>'" in chat_template:
-        return chat_template
-
-    patched = chat_template
-    image_token_line = "{%- set image_token = '<|image|>' -%}"
-    if image_token_line in patched:
-        patched = patched.replace(
-            image_token_line,
-            image_token_line + "\n{%- set audio_token = '<|audio|>' -%}",
-            1,
-        )
-
-    image_branch = """{%- elif part.type == "image" -%}
-                        {{ image_token }}
-                    {%- else -%}
-                        {{- raise_exception("Invalid user part: " + part.type) -}}
-                    {%- endif -%}"""
-    audio_branch = """{%- elif part.type == "image" or part.type == "image_url" or part.type == "input_image" -%}
-                        {{ image_token }}
-                    {%- elif part.type == "audio" or part.type == "audio_url" or part.type == "input_audio" -%}
-                        {{ audio_token }}
-                    {%- else -%}
-                        {{- raise_exception("Invalid user part: " + part.type) -}}
-                    {%- endif -%}"""
-    patched = patched.replace(image_branch, audio_branch, 1)
-
-    old_default_expr = (
-        "'You are Apertus, a helpful assistant created by the SwissAI "
-        "initiative.\\nKnowledge cutoff: 2024-04\\nCurrent date: ' "
-        "+ strftime_now('%Y-%m-%d')"
-    )
-    new_default_expr = "'" + _APERTUS_OMNI_SYSTEM_PROMPT + "'"
-    patched = patched.replace(old_default_expr, new_default_expr, 1)
-
-    return patched
 
 
 def create_instruct_tokenizer(
     base_tokenizer_path: str,
-    instruct_tokenizer_path: str,
+    instruct_tokenizer_path: str | None,
     output_path: str,
+    *,
+    chat_template_file: str | None = None,
+    instruct_revision: str | None = None,
 ) -> tuple[Any, dict[str, Any]]:
     """Add chat template and SFT sequences to a base omni-tokenizer.
 
     Args:
         base_tokenizer_path: Path to base omni-tokenizer (with modality tokens).
         instruct_tokenizer_path: Path or HF model ID for chat template source.
+            May be None when chat_template_file is given.
         output_path: Where to save the instruct tokenizer.
+        chat_template_file: Path to a Jinja file to use as the chat template
+            instead of loading one from instruct_tokenizer_path. Exactly one
+            of the two sources must be provided.
+        instruct_revision: Hub commit to pin when instruct_tokenizer_path is a
+            repo ID; Hub repos are mutable, so reproducible builds should pin.
 
     Returns:
         (tokenizer, stats) tuple.
     """
+    if (instruct_tokenizer_path is None) == (chat_template_file is None):
+        raise ValueError(
+            "Provide exactly one of instruct_tokenizer_path or chat_template_file."
+        )
     print("=" * 60)
     print("CREATING INSTRUCT OMNI-TOKENIZER")
     print("=" * 60)
@@ -163,12 +63,21 @@ def create_instruct_tokenizer(
     print(f"Detected modalities: {list(existing['modalities'].keys())}")
 
     # Load chat template
-    instruct_tokenizer = AutoTokenizer.from_pretrained(instruct_tokenizer_path)
-    chat_template = instruct_tokenizer.chat_template
-    if not chat_template:
-        raise ValueError(
-            f"No chat template found in {instruct_tokenizer_path}."
+    if chat_template_file is not None:
+        with open(chat_template_file, "r", encoding="utf-8") as f:
+            chat_template = f.read()
+        if not chat_template.strip():
+            raise ValueError(f"Chat template file {chat_template_file} is empty.")
+    else:
+        instruct_tokenizer_path = _resolve_tokenizer_path(
+            instruct_tokenizer_path, revision=instruct_revision
         )
+        instruct_tokenizer = AutoTokenizer.from_pretrained(instruct_tokenizer_path)
+        chat_template = instruct_tokenizer.chat_template
+        if not chat_template:
+            raise ValueError(
+                f"No chat template found in {instruct_tokenizer_path}."
+            )
 
     # Copy base to output
     if os.path.abspath(base_tokenizer_path) != os.path.abspath(output_path):
@@ -188,23 +97,29 @@ def create_instruct_tokenizer(
         "modalities": list(existing["modalities"].keys()),
     }
 
-    # Detect chat template style and add SFT sequences
-    if "<|start_header_id|>" in chat_template:
-        chat_template = _patch_llama_chat_template(chat_template)
-        user_header = "<|start_header_id|>user<|end_header_id|>"
-        assistant_header = "<|start_header_id|>assistant<|end_header_id|>"
-        eot_token = "<|eot_id|>"
-        print("Detected LLaMA-3 style chat template")
-    elif "<|user_start|>" in chat_template:
-        chat_template = _patch_apertus_chat_template(chat_template)
-        user_header = "<|user_start|>"
-        assistant_header = "<|assistant_start|>"
-        eot_token = "<|assistant_end|>"
-        print("Detected Apertus style chat template")
-    else:
-        raise ValueError(
-            "Unsupported chat template. Supported: LLaMA-3, Apertus."
+    # The template is consumed verbatim, never rewritten at build time
+    # (for the recipe, the source is the hand-maintained jinja under
+    # chat_templates/).
+    if "<|user_start|>" not in chat_template:
+        raise ValueError("Unsupported chat template. Supported: Apertus.")
+    # Since nothing is injected, every modality the tokenizer carries must be
+    # renderable by the template as given: its content placeholder (the
+    # aliased structure token, e.g. <|image|>, <|audio|>) has to appear.
+    for name in existing["modalities"]:
+        modality = MODALITY_REGISTRY.get(name)
+        if modality is None:
+            continue
+        placeholder = next(
+            (t.target_name for t in modality.structure_tokens if t.alias), None
         )
+        if placeholder is not None and placeholder not in chat_template:
+            raise ValueError(
+                f"Chat template does not reference {placeholder}; it cannot "
+                f"render {name} content."
+            )
+    user_header = "<|user_start|>"
+    assistant_header = "<|assistant_start|>"
+    eot_token = "<|assistant_end|>"
 
     config["chat_template"] = chat_template
 
@@ -233,8 +148,8 @@ def create_instruct_tokenizer(
             print(f"  {name}_end_token: {end_ids} ({mc.end_token})")
 
     # Save config
-    with open(config_path, "w") as f:
-        json.dump(config, f, indent=2)
+    with open(config_path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(config, indent=2))
 
     # Reload from output so returned tokenizer has chat_template set
     tokenizer = AutoTokenizer.from_pretrained(output_path, use_fast=True)
