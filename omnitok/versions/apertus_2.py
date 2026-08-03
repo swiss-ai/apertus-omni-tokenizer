@@ -17,14 +17,15 @@ The instruct stage is not defined yet -- see ``build_instruct``.
 from __future__ import annotations
 
 from ..builder import add_modality_in_place
-from ..io import _rewrite_backend_state, finalize_tokenizer_config
+from ..io import finalize_tokenizer_config
 
 BASE_VOCAB_SIZE = 200_064
 VISION_VOCAB_SIZE = 131_072
 AUDIO_VOCAB_SIZE = 4_096
 TOTAL_VOCAB_SIZE = 335_232
 
-REUSED_IDS = {"<|image|>": 18, "<|audio|>": 19}
+VISION_REUSED_IDS = {"<|image|>": 18}
+AUDIO_REUSED_IDS = {"<|audio|>": 19}
 
 VISION_RENAMES = {
     "<SPECIAL_27>": "<|img_start|>",
@@ -62,14 +63,14 @@ def build(input_tokenizer_path: str, output_path: str):
     add_modality_in_place(
         input_tokenizer_path, output_path, "vision", VISION_VOCAB_SIZE,
         renames=VISION_RENAMES,
-        reused_ids={"<|image|>": REUSED_IDS["<|image|>"]},
+        reused_ids=VISION_REUSED_IDS,
         expected_base_vocab_size=BASE_VOCAB_SIZE,
         publish_structure_ids=True,
     )
     tokenizer, stats = add_modality_in_place(
         output_path, output_path, "audio", AUDIO_VOCAB_SIZE,
         renames=AUDIO_RENAMES,
-        reused_ids={"<|audio|>": REUSED_IDS["<|audio|>"]},
+        reused_ids=AUDIO_REUSED_IDS,
         expected_base_vocab_size=BASE_VOCAB_SIZE,
         publish_structure_ids=True,
     )
@@ -77,14 +78,6 @@ def build(input_tokenizer_path: str, output_path: str):
         raise ValueError(
             f"built {len(tokenizer):,} tokens, expected {TOTAL_VOCAB_SIZE:,}"
         )
-
-    # save_pretrained re-adds an empty TemplateProcessing on transformers 5.x,
-    # so the strip has to be reasserted on the written file.
-    # BOS is template-owned, and nothing may auto-append EOS to a prompt.
-    def _drop_post_processor(state):
-        state["post_processor"] = None
-
-    _rewrite_backend_state(output_path, _drop_post_processor)
 
     finalize_tokenizer_config(
         output_path,

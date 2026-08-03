@@ -90,6 +90,7 @@ EXPECTED = {
 # is intentionally left unchanged, so the fix-behavior test runs on 1.5 alone.
 FIXED_TOKENIZERS = {"Apertus_1p5"}
 
+
 @lru_cache(maxsize=None)
 def _load(tok_dir):
     """One parse per tokenizer directory: these artifacts are up to 41MB."""

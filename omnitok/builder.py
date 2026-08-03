@@ -17,6 +17,8 @@ from transformers import AutoTokenizer
 
 from .io import (
     _resolve_tokenizer_path,
+    _rewrite_backend_state,
+    assert_droppable_post_processor,
     add_token_alias,
     build_omnimodal_config,
     detect_existing_modalities,
@@ -86,7 +88,6 @@ def add_modality(
 
     stats = _init_stats(input_tokenizer_path, mc, base_vocab_size,
                         current_vocab_size, existing)
-    stats["reserved_tokens_added"] = 0
 
     # Idempotency check
     if mc.name in existing["modalities"]:
@@ -228,6 +229,7 @@ def _init_stats(input_tokenizer_path, mc, base_vocab_size, original_vocab_size,
         "modality": mc.name,
         "base_vocab_size": base_vocab_size,
         "original_vocab_size": original_vocab_size,
+        "reserved_tokens_added": 0,
         "content_tokens_added": 0,
         "final_vocab_size": 0,
         "existing_modalities": list(existing["modalities"].keys()),
@@ -247,11 +249,7 @@ def _strip_post_processor(tokenizer) -> None:
     if pp is None:
         return
     declared = {tokenizer.bos_token, tokenizer.eos_token} - {None}
-    state = json.loads(pp.__getstate__())
-    if state.get("type") != "TemplateProcessing" or not (
-        set(state.get("special_tokens", {})) <= declared
-    ):
-        raise ValueError(f"unrecognized base post-processor: {state.get('type')}")
+    assert_droppable_post_processor(json.loads(pp.__getstate__()), declared)
     backend.post_processor = None
     print("Stripped base BOS/EOS post-processor (specials are template-owned)")
 
@@ -288,6 +286,7 @@ def _assemble(
     publish_structure_ids: bool = False,
 ) -> Any:
     """Save, rename, alias, and write omnimodal metadata; returns the reloaded tokenizer."""
+    had_post_processor = tokenizer.backend_tokenizer.post_processor is not None
     save_tokenizer(
         tokenizer,
         output_path,
@@ -333,6 +332,18 @@ def _assemble(
         config_section_name=mc.config_section_name,
         omnimodal_config=omnimodal_config,
     )
+
+    if not had_post_processor:
+        # Every save_pretrained re-adds an empty TemplateProcessing on
+        # transformers 5.x, so a strip made before the saves is reasserted
+        # after the last of them.
+        declared = {tokenizer.bos_token, tokenizer.eos_token} - {None}
+
+        def _drop(state):
+            assert_droppable_post_processor(state.get("post_processor"), declared)
+            state["post_processor"] = None
+
+        _rewrite_backend_state(output_path, _drop)
 
     # Reload after all file mutations so the returned tokenizer matches disk.
     tokenizer = AutoTokenizer.from_pretrained(output_path, use_fast=True)
