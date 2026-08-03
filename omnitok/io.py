@@ -21,7 +21,7 @@ After adding modality tokens, ``tokenizer.vocab_size`` still returns the
 original text-only size (e.g. 131072).  Always use ``len(tokenizer)`` or
 ``len(tokenizer.get_vocab())`` to get the true total.
 
-Call flow (driven by builder.add_modality):
+Call flow (driven by builder._assemble, shared by both entry points):
 
     save_tokenizer()              # save HF tokenizer + write base metadata
     rename_reserved_tokens()      # e.g. <|RESERVED_OMNI_001|> -> <|img_start|>
@@ -92,6 +92,20 @@ def _rewrite_backend_state(
     state = json.loads(Tokenizer.from_file(path).to_str())
     mutate(state)
     Tokenizer.from_str(json.dumps(state)).save(path, pretty=True)
+
+
+def assert_droppable_post_processor(state: dict[str, Any], declared: set[str]) -> None:
+    """Refuse post-processor shapes that are not safe to drop.
+
+    Only a TemplateProcessing over the tokenizer's own declared bos/eos is;
+    anything else encodes behaviour the caller did not ask to lose.
+    """
+    if state is None:
+        return
+    if state.get("type") != "TemplateProcessing" or not (
+        set(state.get("special_tokens", {})) <= declared
+    ):
+        raise ValueError(f"unrecognized post-processor: {state.get('type')}")
 
 
 def rename_reserved_tokens(
@@ -460,8 +474,7 @@ def write_tokenizer_config(
         else:
             config.pop("omnimodal_config", None)
 
-    with open(config_path, "w", encoding="utf-8") as f:
-        f.write(json.dumps(config, indent=2))
+    dump_canonical_json(config, config_path)
 
 
 def save_tokenizer(
