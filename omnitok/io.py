@@ -97,8 +97,9 @@ def _rewrite_backend_state(
 def assert_droppable_post_processor(state: dict[str, Any], declared: set[str]) -> None:
     """Refuse post-processor shapes that are not safe to drop.
 
-    Only a TemplateProcessing over the tokenizer's own declared bos/eos is;
-    anything else encodes behaviour the caller did not ask to lose.
+    Only a TemplateProcessing over the tokenizer's own declared bos/eos
+    is droppable; anything else encodes behaviour the caller did not
+    ask to lose.
     """
     if state is None:
         return
@@ -394,8 +395,8 @@ def finalize_tokenizer_config(
     not to the build environment.
 
     Writes chat_template.jinja only if the built config carries a template;
-    set ``require_chat_template`` where its absence means the instruct stage
-    silently did not run.
+    set ``require_chat_template`` where its absence means
+    the instruct stage silently did not run.
     Rewrites special_tokens_map.json from whichever role tokens are present.
 
     Returns the config that was written.
@@ -559,10 +560,12 @@ def read_modality_info(
 ) -> dict[str, Any] | None:
     """Derive a single modality's summary from the tokenizer vocabulary.
 
-    Returns {name, offset, vocab_size, start_token, end_token} or None
+    Returns {name, offset, vocab_size, start_token, end_token} -- plus
+    structure_token_ids when ``publish_structure_ids`` is set -- or None
     if the modality's content or structure tokens are not in the vocabulary.
-    ``publish_structure_ids`` adds the structure_token_ids map; the Apertus
-    1.5 artifact predates that field, so it stays off unless a recipe asks.
+    ``publish_structure_ids`` adds the structure_token_ids map;
+    the Apertus 1.5 artifact predates that field, so it stays off
+    unless a recipe asks.
     Walks the content tokens from index 0, verifying id = offset + index as it counts them —
     every config this feeds is only written for contiguous ids,
     which is what lets consumers look tokens up by offset arithmetic.

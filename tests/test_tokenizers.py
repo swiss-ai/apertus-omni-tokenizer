@@ -93,7 +93,7 @@ FIXED_TOKENIZERS = {"Apertus_1p5"}
 
 @lru_cache(maxsize=None)
 def _load(tok_dir):
-    """One parse per tokenizer directory: these artifacts are up to 41MB."""
+    """One parse per tokenizer directory: these artifacts are tens of MB."""
     return AutoTokenizer.from_pretrained(str(tok_dir))
 
 
