@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from tokenizers import AddedToken, Tokenizer
+from tokenizers import AddedToken
 from transformers import AutoTokenizer
 
 from .io import (
@@ -172,7 +172,8 @@ def add_modality_in_place(
     tokens are appended. Raises if the base does not match the recipe.
 
     One-shot per modality: rebuild from the base rather than re-running
-    over an output.
+    over an output. ``publish_structure_ids`` records each structure
+    token's id in omnimodal_config.
 
     Returns:
         (tokenizer, stats) tuple.
@@ -240,9 +241,8 @@ def _strip_post_processor(tokenizer) -> None:
     """Drop the base's BOS/EOS-injecting post-processor.
 
     BOS is template-owned and nothing may auto-append EOS to prompts
-    (apertus-program#420); SFT packing needs exact encoding. Refuses shapes
-    it does not recognize: only a TemplateProcessing over this tokenizer's
-    own declared bos/eos is safe to drop.
+    (apertus-program#420); SFT packing needs exact encoding.
+    See assert_droppable_post_processor for the shapes this refuses.
     """
     backend = tokenizer.backend_tokenizer
     pp = backend.post_processor
@@ -285,7 +285,13 @@ def _assemble(
     extra_config: dict[str, Any] | None,
     publish_structure_ids: bool = False,
 ) -> Any:
-    """Save, rename, alias, and write omnimodal metadata; returns the reloaded tokenizer."""
+    """Save, rename, alias, and write omnimodal metadata.
+
+    Re-strips the post-processor after the last write when the caller had
+    already dropped it: every save_pretrained re-adds an empty
+    TemplateProcessing on transformers 5.x.
+    Returns the reloaded tokenizer.
+    """
     had_post_processor = tokenizer.backend_tokenizer.post_processor is not None
     save_tokenizer(
         tokenizer,

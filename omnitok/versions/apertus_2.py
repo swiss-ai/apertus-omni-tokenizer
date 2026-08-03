@@ -1,14 +1,15 @@
 """Apertus 2 omni build recipe.
 
-Base: ``preliminary_mul_200k`` (cmeister/apertus_v2_tokenizer, decided in
-swiss-ai/apertus-program#429 on 2026-06-30) — 200,064 text tokens with
-pre-baked ``<|image|>``/``<|audio|>`` and a ``<SPECIAL_*>`` reserve pool.
+Base: ``preliminary_mul_200k`` (cmeister/apertus_v2_tokenizer,
+decided in swiss-ai/apertus-program#429 on 2026-06-30).
+200,064 text tokens, with pre-baked ``<|image|>``/``<|audio|>``
+and a ``<SPECIAL_*>`` reserve pool.
 
 The tables below are the spec: the build renames pool slots in place
-(ids never move), reuses the pre-baked placeholders, and appends only
-content tokens. The build asserts the base matches and fails loudly on
-drift; ids verified against the published omni_mul200k_vision_audio_335232
-artifact.
+(ids never move), reuses the pre-baked placeholders,
+and appends only content tokens.
+The build asserts the base matches and fails loudly on drift;
+ids verified against the published omni_mul200k_vision_audio_335232 artifact.
 
 Base tokenizer only.
 The instruct stage is not defined yet -- see ``build_instruct``.
