@@ -171,9 +171,13 @@ def add_modality_in_place(
     ``reused_ids`` (name -> pinned id) are reused as-is, and only content
     tokens are appended. Raises if the base does not match the recipe.
 
-    One-shot per modality: rebuild from the base rather than re-running
-    over an output. ``publish_structure_ids`` records each structure
-    token's id in omnimodal_config.
+    Modalities stack: pass one call's output as the next call's input, the
+    way the Apertus 2 recipe chains vision then audio. What is not supported
+    is re-running the same modality over its own output -- the pool slots it
+    renamed are gone, so the base assertion rejects it.
+
+    ``publish_structure_ids`` records each structure token's id in
+    omnimodal_config.
 
     Returns:
         (tokenizer, stats) tuple.
