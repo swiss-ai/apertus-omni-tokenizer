@@ -6,8 +6,7 @@ import os
 import pytest
 from transformers import AutoTokenizer
 
-from tokenizers import Tokenizer, models
-from transformers import PreTrainedTokenizerFast
+from tokenizer_factory import make_word_level_tokenizer
 
 from omnitok import (
     add_modality,
@@ -266,10 +265,7 @@ class TestExtraConfig:
 
 
 def _synthetic_tokenizer(tokens, *, special=False):
-    backend = Tokenizer(models.WordLevel({"<unk>": 0}, unk_token="<unk>"))
-    tok = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="<unk>")
-    tok.add_tokens(tokens, special_tokens=special)
-    return tok
+    return make_word_level_tokenizer(added_tokens=tokens, added_special=special)
 
 
 class TestOmnimodalDerivation:

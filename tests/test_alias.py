@@ -8,11 +8,12 @@ as a manual string replacement, making dataloader-side transforms
 import json
 
 import pytest
-from tokenizers import Tokenizer, models, normalizers
-from transformers import AddedToken, AutoTokenizer, PreTrainedTokenizerFast
+from tokenizers import normalizers
+from transformers import AddedToken, AutoTokenizer
 
 from omnitok.apertus import add_reasoning_aliases
 from omnitok.io import add_token_alias
+from tokenizer_factory import make_word_level_tokenizer
 
 
 class TestVisionAlias:
@@ -104,14 +105,13 @@ class TestAliasNormalizerChain:
 
     @staticmethod
     def _make_base(tmp_path, base_normalizer, normalized=True):
-        backend = Tokenizer(models.WordLevel({"<unk>": 0, "hi": 1}, unk_token="<unk>"))
-        backend.normalizer = base_normalizer
-        tok = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="<unk>")
-        tok.add_tokens(
-            [
+        tok = make_word_level_tokenizer(
+            ("<unk>", "hi"),
+            normalizer=base_normalizer,
+            added_tokens=[
                 AddedToken("<|image|>", special=True, normalized=normalized),
                 AddedToken("<|audio|>", special=True, normalized=normalized),
-            ]
+            ],
         )
         out = str(tmp_path / "base")
         tok.save_pretrained(out)
@@ -207,13 +207,12 @@ class TestReasoningAliases:
 
     @staticmethod
     def _base(tmp_path):
-        backend = Tokenizer(models.WordLevel({"<unk>": 0, "hi": 1}, unk_token="<unk>"))
-        tok = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="<unk>")
-        tok.add_tokens(
-            [
+        tok = make_word_level_tokenizer(
+            ("<unk>", "hi"),
+            added_tokens=[
                 AddedToken("<|inner_prefix|>", special=False, normalized=False),
                 AddedToken("<|inner_suffix|>", special=False, normalized=False),
-            ]
+            ],
         )
         out = str(tmp_path / "base")
         tok.save_pretrained(out)
@@ -261,8 +260,7 @@ class TestReasoningAliases:
             assert len(json.load(f)["normalizer"]["normalizers"]) == n_rules
 
     def test_missing_delimiter_raises(self, tmp_path):
-        backend = Tokenizer(models.WordLevel({"<unk>": 0}, unk_token="<unk>"))
-        tok = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="<unk>")
+        tok = make_word_level_tokenizer()
         out = str(tmp_path / "bare")
         tok.save_pretrained(out)
         with pytest.raises(ValueError, match="not an added token"):

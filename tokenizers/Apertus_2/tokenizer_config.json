@@ -1,0 +1,56 @@
+{
+  "add_prefix_space": false,
+  "added_tokens_count": 135168,
+  "base_vocab_size": 200064,
+  "bos_token": "<s>",
+  "clean_up_tokenization_spaces": false,
+  "eos_token": "</s>",
+  "model_input_names": [
+    "input_ids",
+    "attention_mask"
+  ],
+  "model_max_length": 1000000000000000019884624838656,
+  "omnimodal_config": {
+    "modalities": [
+      {
+        "end_token": 28,
+        "name": "vision",
+        "offset": 200064,
+        "start_token": 27,
+        "structure_token_ids": {
+          "<|image|>": 18,
+          "<|img_end_of_frame|>": 31,
+          "<|img_end_of_row|>": 30,
+          "<|img_end|>": 28,
+          "<|img_generation_start|>": 32,
+          "<|img_start|>": 27,
+          "<|img_token_start|>": 29
+        },
+        "vocab_size": 131072
+      },
+      {
+        "end_token": 34,
+        "name": "audio",
+        "offset": 331136,
+        "start_token": 33,
+        "structure_token_ids": {
+          "<|audio_annotate|>": 39,
+          "<|audio_end|>": 34,
+          "<|audio_start|>": 33,
+          "<|audio|>": 19,
+          "<|stt_continue|>": 36,
+          "<|stt_transcribe|>": 35,
+          "<|stt_translate|>": 38,
+          "<|tts_continue|>": 37
+        },
+        "vocab_size": 4096
+      }
+    ],
+    "omni_special_token_offset": 200064
+  },
+  "pad_token": "<pad>",
+  "padding_side": "left",
+  "tokenizer_class": "PreTrainedTokenizerFast",
+  "unk_token": "<unk>",
+  "vocab_size": 335232
+}

@@ -11,6 +11,7 @@ back to the <|inner_*|> form. Apertus_1 has no such collision. See PR #7.
 """
 
 import json
+from functools import lru_cache
 from pathlib import Path
 
 import pytest
@@ -69,11 +70,32 @@ EXPECTED = {
             ("String", "</think>", "<|inner_suffix|>"),
         ],
     },
+    "Apertus_2": {
+        "encode": {
+            "<|image|>": [18],
+            "<image>": [18],
+            "<|audio|>": [19],
+            "<audio>": [19],
+            "<|img_start|>": [27],
+            "<|audio_annotate|>": [39],
+            "<|visual token 0|>": [200064],
+            "<|audio token 4095|>": [335231],
+        },
+        "decode": {18: "<|image|>", 27: "<|img_start|>", 200064: "<|visual token 0|>"},
+        "eos": "</s>",
+    },
 }
 
 # The reasoning-delimiter fix is applied to Apertus 1.5 only; the 1.0 tokenizer
 # is intentionally left unchanged, so the fix-behavior test runs on 1.5 alone.
 FIXED_TOKENIZERS = {"Apertus_1p5"}
+
+
+@lru_cache(maxsize=None)
+def _load(tok_dir):
+    """One parse per tokenizer directory: these artifacts are tens of MB."""
+    return AutoTokenizer.from_pretrained(str(tok_dir))
+
 
 PINNED_DIRS = [p for p in TOKENIZER_DIRS if p.name in EXPECTED]
 RULE_PINNED_DIRS = [
@@ -86,7 +108,7 @@ RULE_PINNED_DIRS = [
 )
 def test_tokenizer_loads(tok_dir):
     """Every checked-in tokenizer loads (catches truncated/corrupt files)."""
-    tok = AutoTokenizer.from_pretrained(str(tok_dir))
+    tok = _load(tok_dir)
     assert tok.vocab_size > 0
 
 
@@ -95,7 +117,7 @@ def test_tokenizer_loads(tok_dir):
 )
 def test_text_roundtrip(tok_dir):
     """Plain text survives an encode -> decode round trip."""
-    tok = AutoTokenizer.from_pretrained(str(tok_dir))
+    tok = _load(tok_dir)
     text = "Hello world, this is a tokenizer test."
     decoded = tok.decode(tok.encode(text, add_special_tokens=False))
     assert "Hello world" in decoded
@@ -104,7 +126,7 @@ def test_text_roundtrip(tok_dir):
 @pytest.mark.parametrize("tok_dir", PINNED_DIRS, ids=lambda p: p.name)
 def test_special_token_encode(tok_dir):
     """Special tokens encode to their pinned IDs."""
-    tok = AutoTokenizer.from_pretrained(str(tok_dir))
+    tok = _load(tok_dir)
     for token, ids in EXPECTED[tok_dir.name]["encode"].items():
         assert tok.encode(token, add_special_tokens=False) == ids, token
 
@@ -112,7 +134,7 @@ def test_special_token_encode(tok_dir):
 @pytest.mark.parametrize("tok_dir", PINNED_DIRS, ids=lambda p: p.name)
 def test_special_token_decode(tok_dir):
     """Reserved IDs decode to their pinned strings (pins the 32/33 asymmetry)."""
-    tok = AutoTokenizer.from_pretrained(str(tok_dir))
+    tok = _load(tok_dir)
     for token_id, expected in EXPECTED[tok_dir.name]["decode"].items():
         assert tok.decode([token_id]) == expected, token_id
 
@@ -121,7 +143,7 @@ def test_special_token_decode(tok_dir):
 def test_eos_token(tok_dir):
     """Apertus_1 mirrors upstream's eos; Apertus_1p5 carries the production
     convention (eos = </s>, turn/tool stops live in generation_config)."""
-    tok = AutoTokenizer.from_pretrained(str(tok_dir))
+    tok = _load(tok_dir)
     assert tok.eos_token == EXPECTED[tok_dir.name]["eos"]
 
 
@@ -152,7 +174,7 @@ def test_reasoning_delimiters_survive_skip_special(tok_dir):
     detokenization would strip them and a vLLM reasoning parser could not find
     the end-of-reasoning delimiter -- the whole deliberation block would leak
     into `content` (apertus-omni-tokenizer #5)."""
-    tok = AutoTokenizer.from_pretrained(str(tok_dir))
+    tok = _load(tok_dir)
     for token_id, expected in EXPECTED[tok_dir.name]["decode"].items():
         assert tok.decode([token_id], skip_special_tokens=True) == expected, token_id
 

@@ -5,13 +5,14 @@ from .apertus import (
     build_apertus_1p5,
     prepare_apertus_1p5_text_base,
 )
-from .builder import add_modality
+from .builder import add_modality, add_modality_in_place
 from .instruct import create_instruct_tokenizer
 from .io import detect_existing_modalities, get_content_token_id, load_modality_mapping
 from .modalities import AUDIO, MODALITY_REGISTRY, VISION, ModalityConfig, TokenRename
 
 __all__ = [
     "add_modality",
+    "add_modality_in_place",
     "add_reasoning_aliases",
     "build_apertus_1p5",
     "prepare_apertus_1p5_text_base",

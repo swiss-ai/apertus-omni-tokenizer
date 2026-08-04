@@ -66,6 +66,7 @@ from .builder import add_modality
 from .instruct import create_instruct_tokenizer
 from .io import (
     _prepend_rules,
+    finalize_tokenizer_config,
     _resolve_tokenizer_path,
     _rewrite_backend_state,
     add_token_alias,
@@ -182,12 +183,6 @@ def _default_chat_template_path() -> str:
     )
 
 
-def _dump_canonical_json(obj: dict[str, Any], path: str) -> None:
-    """transformers-style deterministic JSON: sorted keys, indent 2, LF tail."""
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(json.dumps(obj, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
-
-
 def _add_think_aliases(save_path: str) -> None:
     """Alias the <think>/</think> literals to the delimiters at 32/33.
 
@@ -204,9 +199,10 @@ def _add_think_aliases(save_path: str) -> None:
 def add_reasoning_aliases(save_path: str) -> None:
     """Retrofit the canonical 1.5 reasoning rewrites onto an existing tokenizer.
 
-    Installs the same rules the build recipe does: <think>/</think> aliased to
-    the <|inner_prefix|>/<|inner_suffix|> delimiters (flipping the targets to
-    normalized=True), then the REASONING_CLEANUP_RULES prepended in front.
+    Installs the same rules the build recipe does:
+    <think>/</think> aliased to the <|inner_prefix|>/<|inner_suffix|> delimiters,
+    which flips the targets to normalized=True,
+    then REASONING_CLEANUP_RULES prepended in front.
     Idempotent; raises ValueError if a delimiter is not an added token.
     """
     _add_think_aliases(save_path)
@@ -309,17 +305,6 @@ def _finalize_apertus_1p5(output_path: str) -> None:
 
     _rewrite_backend_state(output_path, _keep_stt_flag_and_prepend_rules)
 
-    config_path = os.path.join(output_path, "tokenizer_config.json")
-    with open(config_path, "r", encoding="utf-8") as f:
-        built = json.load(f)
-
-    chat_template = built.pop("chat_template", None)
-    if chat_template is None:
-        raise ValueError("Pipeline did not produce a chat template.")
-    with open(os.path.join(output_path, "chat_template.jinja"), "w",
-              encoding="utf-8") as f:
-        f.write(chat_template)
-
     carried_keys = (
         "add_prefix_space", "added_tokens_count", "audio_begin_token",
         "audio_end_token", "audio_tokenizer", "base_vocab_size", "bos_token",
@@ -329,36 +314,22 @@ def _finalize_apertus_1p5(output_path: str) -> None:
         "sft_user_begin_sequence", "unk_token", "vision_begin_token",
         "vision_end_token", "vision_tokenizer",
     )
-    config = {key: built[key] for key in carried_keys}
-    config.update(EXTRA_SPECIAL_TOKENS)
-    config.update({
-        # The base stops on <|assistant_end|>; 1.5 ends sequences with the
-        # plain </s> terminator and keeps the turn/tool stops in
-        # generation_config.
-        "eos_token": "</s>",
-        "extra_special_tokens": dict(EXTRA_SPECIAL_TOKENS),
-        "processor_class": "Apertus1p5Processor",
-        "tokenizer_class": "PreTrainedTokenizerFast",
-        # Canonical quirk: the base text vocab size, not the true total.
-        "vocab_size": BASE_VOCAB_SIZE,
-    })
-    _dump_canonical_json(config, config_path)
-
-    def _token_entry(content: str) -> dict[str, Any]:
-        return {
-            "content": content,
-            "lstrip": False,
-            "normalized": False,
-            "rstrip": False,
-            "single_word": False,
-        }
-
-    _dump_canonical_json(
-        {
-            name: _token_entry(config[name])
-            for name in ("bos_token", "eos_token", "pad_token", "unk_token")
+    finalize_tokenizer_config(
+        output_path,
+        carried_keys=carried_keys,
+        require_chat_template=True,
+        overrides={
+            **EXTRA_SPECIAL_TOKENS,
+            # The base stops on <|assistant_end|>; 1.5 ends sequences with the
+            # plain </s> terminator and keeps the turn/tool stops in
+            # generation_config.
+            "eos_token": "</s>",
+            "extra_special_tokens": dict(EXTRA_SPECIAL_TOKENS),
+            "processor_class": "Apertus1p5Processor",
+            "tokenizer_class": "PreTrainedTokenizerFast",
+            # Canonical quirk: the base text vocab size, not the true total.
+            "vocab_size": BASE_VOCAB_SIZE,
         },
-        os.path.join(output_path, "special_tokens_map.json"),
     )
 
 

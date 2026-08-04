@@ -18,10 +18,9 @@ import os
 import jinja2
 import pytest
 from _pytest.outcomes import Failed
-from tokenizers import Tokenizer
-from tokenizers.models import WordLevel
-from tokenizers.pre_tokenizers import Whitespace
 from transformers import PreTrainedTokenizerFast
+
+from tokenizer_factory import make_word_level_tokenizer
 
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 _TEMPLATES_DIR = os.path.join(_REPO_ROOT, "chat_templates")
@@ -39,24 +38,10 @@ def _rel(path: str) -> str:
 
 
 def _make_tokenizer(template_source: str) -> PreTrainedTokenizerFast:
-    """
-    Minimal tokenizer that can render any chat template with tokenize=False.
-
-    The vocabulary is intentionally tiny — only bos/eos/unk are needed because
-    apply_chat_template(..., tokenize=False) returns a plain string without
-    looking up any token IDs.
-    """
-    vocab = {"<unk>": 0, "<s>": 1, "</s>": 2}
-    inner = Tokenizer(WordLevel(vocab, unk_token="<unk>"))
-    inner.pre_tokenizer = Whitespace()
-    tok = PreTrainedTokenizerFast(
-        tokenizer_object=inner,
-        bos_token="<s>",
-        eos_token="</s>",
-        unk_token="<unk>",
+    """Minimal tokenizer that can render any chat template with tokenize=False."""
+    return make_word_level_tokenizer(
+        whitespace=True, bos_eos=True, chat_template=template_source
     )
-    tok.chat_template = template_source
-    return tok
 
 
 def _render(path: str, messages: list[dict]) -> str:

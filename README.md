@@ -6,14 +6,17 @@ release) from the Apertus 1 base
 ([swiss-ai/Apertus-8B-2509](https://huggingface.co/swiss-ai/Apertus-8B-2509)),
 and documents the chat templates and canonical tokenizer files for both releases.
 
-## Building the Apertus 1.5 tokenizer
+## Building the tokenizers
 
 ```bash
 # From the pinned canonical base on the Hub
-python -m omnitok.cli --output-path ./Apertus_1p5
+python -m omnitok.cli build-apertus-1p5 --output-path ./Apertus_1p5
 
 # Offline, from the checked-in copy of the base
-python -m omnitok.cli --output-path ./Apertus_1p5 --base-tokenizer tokenizers/Apertus_1
+python -m omnitok.cli build-apertus-1p5 --output-path ./Apertus_1p5 --base-tokenizer tokenizers/Apertus_1
+
+# Apertus 2: rename the base's pre-baked <SPECIAL_*> pool in place, append content
+python -m omnitok.cli build-apertus-2 --input-tokenizer <base> --output-path ./Apertus_2
 ```
 
 Or as a library:
@@ -34,7 +37,7 @@ including the deliberate repairs over the originally released RC artifact.
 Do not hand-edit tokenizer files: change the recipe (or the chat template
 under `chat_templates/Apertus_1p5/`) and rebuild.
 
-## Token layout
+## Token layout (Apertus 1.5)
 
 ```
 [0 .. base-1]           text tokens (unchanged)
@@ -46,7 +49,12 @@ under `chat_templates/Apertus_1p5/`) and rebuild.
 [base+200 .. ]          content tokens (appended per modality in order added)
 ```
 
-## Reserved slot allocation
+Apertus 2 allocates differently: its base ships a `<SPECIAL_*>` pool, so the
+structure tokens are renamed in place at low ids (18-39) inside the text vocab
+and only content tokens are appended.
+See [docs/omnimodal_config.md](docs/omnimodal_config.md) for both schemes.
+
+## Reserved slot allocation (Apertus 1.5)
 
 | Slots | Modality | Tokens |
 |-------|----------|--------|
@@ -132,7 +140,9 @@ apertus-omni-tokenizer/
 │   ├── __init__.py      # public API exports
 │   ├── apertus.py       # build_apertus_1p5() -- the Apertus 1 -> 1.5 recipe
 │   ├── modalities.py    # ModalityConfig dataclass, built-in VISION/AUDIO configs
-│   ├── builder.py       # add_modality() -- modality engine (driven by the recipe)
+│   ├── builder.py       # add_modality() / add_modality_in_place() -- modality engine
+│   ├── versions/
+│   │   └── apertus_2.py # Apertus 2 recipe (in-place pool renames)
 │   ├── instruct.py      # create_instruct_tokenizer() -- chat template + SFT sequences
 │   ├── io.py            # low-level file I/O (rename, alias, detect, save)
 │   └── cli.py           # CLI wrapper (python -m omnitok.cli)
@@ -140,6 +150,8 @@ apertus-omni-tokenizer/
 │   ├── conftest.py             # shared fixtures
 │   ├── test_alias.py           # token alias tests (<image> == <|image|>)
 │   ├── test_apertus_recipe.py  # build reproduces the canonical 1.5 byte-for-byte
+│   ├── test_instruct.py        # chat template handling
+│   ├── tokenizer_factory.py    # shared synthetic-tokenizer factory
 │   ├── test_builder.py         # add_modality tests
 │   ├── test_chat_template.py   # add chat template test
 │   ├── test_task_tokens.py     # task token contract tests
@@ -148,7 +160,10 @@ apertus-omni-tokenizer/
 │   ├── Apertus_1/            # Instructed tokenizer used for Apertus 1.0
 │   │   ├── tokenizer.json
 │   │   └── tokenizer_config.json
-│   └── Apertus_1p5/          # Instructed tokenizer used for Apertus 1.5
+│   ├── Apertus_1p5/          # Instructed tokenizer used for Apertus 1.5
+│   │   ├── tokenizer.json
+│   │   └── tokenizer_config.json
+│   └── Apertus_2/            # Base omni tokenizer for Apertus 2
 │       ├── tokenizer.json
 │       └── tokenizer_config.json
 ├── chat_templates/
@@ -159,7 +174,8 @@ apertus-omni-tokenizer/
 └── validation/
     ├── gen_checksums.sh      # regenerate the manifests below
     ├── Apertus_1.md5         # canonical md5s for the 1.0 tokenizer
-    └── Apertus_1p5.md5       # canonical md5s for the 1.5 tokenizer
+    ├── Apertus_1p5.md5       # canonical md5s for the 1.5 tokenizer
+    └── Apertus_2.md5         # canonical md5s for the Apertus 2 base
 ```
 
 Adding a new modality = one new `ModalityConfig` entry in `modalities.py`.

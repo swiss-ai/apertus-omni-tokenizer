@@ -1,11 +1,15 @@
-"""The single engine for adding modalities to tokenizers.
+"""The modality engine: adds vision/audio tokens to any text tokenizer.
 
-Replaces both create_base_tokenizer (vision) and add_audio_tokens (audio)
-with one modality-agnostic function.
+Two entry points for the two allocation strategies, both converging on the
+shared _assemble tail:
+
+    add_modality           append a RESERVED_OMNI pool, rename it, append content
+    add_modality_in_place  rename a pre-baked <SPECIAL_*> pool, append content
 """
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from tokenizers import AddedToken
@@ -13,6 +17,8 @@ from transformers import AutoTokenizer
 
 from .io import (
     _resolve_tokenizer_path,
+    _rewrite_backend_state,
+    assert_droppable_post_processor,
     add_token_alias,
     build_omnimodal_config,
     detect_existing_modalities,
@@ -80,16 +86,8 @@ def add_modality(
     print(f"Current vocab size: {current_vocab_size:,}")
     print(f"Base vocab size (text-only): {base_vocab_size:,}")
 
-    stats = {
-        "input_tokenizer": input_tokenizer_path,
-        "modality": mc.name,
-        "base_vocab_size": base_vocab_size,
-        "original_vocab_size": current_vocab_size,
-        "reserved_tokens_added": 0,
-        "content_tokens_added": 0,
-        "final_vocab_size": 0,
-        "existing_modalities": list(existing["modalities"].keys()),
-    }
+    stats = _init_stats(input_tokenizer_path, mc, base_vocab_size,
+                        current_vocab_size, existing)
 
     # Idempotency check
     if mc.name in existing["modalities"]:
@@ -144,7 +142,162 @@ def add_modality(
     stats["final_vocab_size"] = len(tokenizer)
     print(f"New vocab size: {stats['final_vocab_size']:,}")
 
-    # Save
+    renames = {
+        f"<|RESERVED_OMNI_{r.reserved_index:03d}|>": r.target_name
+        for r in mc.structure_tokens
+    }
+    tokenizer = _assemble(
+        output_path, tokenizer, mc, vocab_size, base_vocab_size,
+        renames, extra_config,
+    )
+    return tokenizer, stats
+
+
+def add_modality_in_place(
+    input_tokenizer_path: str,
+    output_path: str,
+    modality: str | ModalityConfig,
+    vocab_size: int,
+    *,
+    renames: dict[str, str],
+    reused_ids: dict[str, int],
+    expected_base_vocab_size: int | None = None,
+    publish_structure_ids: bool = False,
+) -> tuple[Any, dict[str, Any]]:
+    """Add a modality by renaming the base's pre-baked reserve slots.
+
+    For bases that ship their own special-token pool, as Apertus 2 does:
+    the pool slots in ``renames`` are renamed in place,
+    the placeholders in ``reused_ids`` (name -> pinned id) are reused as-is,
+    and only content tokens are appended.
+    Raises if the base does not match the recipe.
+
+    Modalities stack: pass one call's output as the next call's input,
+    the way the Apertus 2 recipe chains vision then audio.
+    What is not supported is re-running the same modality over its own output;
+    the pool slots it renamed are gone, so the base assertion rejects it.
+
+    ``publish_structure_ids`` records each structure token's id in
+    omnimodal_config.
+
+    Returns:
+        (tokenizer, stats) tuple.
+    """
+    mc = _resolve_modality(modality)
+    if vocab_size <= 0:
+        raise ValueError(f"vocab_size must be positive, got {vocab_size}")
+
+    print("=" * 60)
+    print(f"ADDING MODALITY IN PLACE: {mc.name}")
+    print("=" * 60)
+
+    existing = detect_existing_modalities(input_tokenizer_path)
+    tokenizer = AutoTokenizer.from_pretrained(input_tokenizer_path, use_fast=True)
+    base_vocab_size = existing["base_vocab_size"] or len(tokenizer)
+    if expected_base_vocab_size and base_vocab_size != expected_base_vocab_size:
+        raise ValueError(
+            f"base vocab is {base_vocab_size:,}, "
+            f"expected {expected_base_vocab_size:,}"
+        )
+    print(f"\nInput tokenizer: {input_tokenizer_path}")
+    print(f"Base vocab size (text-only): {base_vocab_size:,}")
+
+    _strip_post_processor(tokenizer)
+    _assert_in_place_base(tokenizer, renames, reused_ids)
+
+    stats = _init_stats(input_tokenizer_path, mc, base_vocab_size,
+                        len(tokenizer), existing)
+
+    content = _collect_content_tokens(tokenizer.get_vocab(), vocab_size, mc)
+    stats["content_tokens_added"] = len(content)
+    print(f"\nAdding {len(content):,} content tokens...")
+    tokenizer.add_tokens(content, special_tokens=True)
+
+    stats["final_vocab_size"] = len(tokenizer)
+    print(f"New vocab size: {stats['final_vocab_size']:,}")
+
+    tokenizer = _assemble(
+        output_path, tokenizer, mc, vocab_size, base_vocab_size,
+        renames, extra_config=None,
+        publish_structure_ids=publish_structure_ids,
+    )
+    return tokenizer, stats
+
+
+# ── Private helpers ──────────────────────────────────────────────────────────
+
+
+def _init_stats(input_tokenizer_path, mc, base_vocab_size, original_vocab_size,
+                existing) -> dict[str, Any]:
+    """The stats skeleton both entry points fill in as they go."""
+    return {
+        "input_tokenizer": input_tokenizer_path,
+        "modality": mc.name,
+        "base_vocab_size": base_vocab_size,
+        "original_vocab_size": original_vocab_size,
+        "reserved_tokens_added": 0,
+        "content_tokens_added": 0,
+        "final_vocab_size": 0,
+        "existing_modalities": list(existing["modalities"].keys()),
+    }
+
+
+def _strip_post_processor(tokenizer) -> None:
+    """Drop the base's BOS/EOS-injecting post-processor.
+
+    BOS is template-owned and nothing may auto-append EOS to prompts
+    (apertus-program#420); SFT packing needs exact encoding.
+    See assert_droppable_post_processor for the shapes this refuses.
+    """
+    backend = tokenizer.backend_tokenizer
+    pp = backend.post_processor
+    if pp is None:
+        return
+    declared = {tokenizer.bos_token, tokenizer.eos_token} - {None}
+    assert_droppable_post_processor(json.loads(pp.__getstate__()), declared)
+    backend.post_processor = None
+    print("Stripped base BOS/EOS post-processor (specials are template-owned)")
+
+
+def _assert_in_place_base(
+    tokenizer,
+    renames: dict[str, str],
+    reused_ids: dict[str, int],
+) -> None:
+    """The base must carry the recipe's pool slots and placeholders."""
+    vocab = tokenizer.get_vocab()
+    added = {t.content for t in tokenizer.added_tokens_decoder.values()}
+    missing = [s for s in renames if s not in added]
+    if missing:
+        raise ValueError(f"base is missing reserve slots: {missing}")
+    taken = [t for t in renames.values() if t in vocab]
+    if taken:
+        raise ValueError(f"rename targets already exist in the base: {taken}")
+    for name, expected in reused_ids.items():
+        if name not in added:
+            raise ValueError(f"reused token {name} is not an added token")
+        if vocab[name] != expected:
+            raise ValueError(f"{name} has id {vocab[name]}, expected {expected}")
+
+
+def _assemble(
+    output_path: str,
+    tokenizer,
+    mc: ModalityConfig,
+    vocab_size: int,
+    base_vocab_size: int,
+    renames: dict[str, str],
+    extra_config: dict[str, Any] | None,
+    publish_structure_ids: bool = False,
+) -> Any:
+    """Save, rename, alias, and write omnimodal metadata.
+
+    Re-strips the post-processor after the last write when the caller had
+    already dropped it: every save_pretrained re-adds an empty
+    TemplateProcessing on transformers 5.x.
+    Returns the reloaded tokenizer.
+    """
+    had_post_processor = tokenizer.backend_tokenizer.post_processor is not None
     save_tokenizer(
         tokenizer,
         output_path,
@@ -154,11 +307,7 @@ def add_modality(
     )
 
     # Rename structure tokens
-    print(f"\nRenaming RESERVED_OMNI tokens to {mc.name} structure tokens...")
-    renames = {
-        f"<|RESERVED_OMNI_{r.reserved_index:03d}|>": r.target_name
-        for r in mc.structure_tokens
-    }
+    print(f"\nRenaming reserved tokens to {mc.name} structure tokens...")
     rename_reserved_tokens(output_path, tokenizer, renames)
 
     # Reload so returned tokenizer has renames applied.
@@ -173,7 +322,9 @@ def add_modality(
         tokenizer.save_pretrained(output_path)
 
     # build_omnimodal_config verifies content-id contiguity for every modality.
-    omnimodal_config = build_omnimodal_config(base_vocab_size, tokenizer)
+    omnimodal_config = build_omnimodal_config(
+        base_vocab_size, tokenizer, publish_structure_ids=publish_structure_ids
+    )
     built = next(
         (m for m in omnimodal_config.get("modalities", []) if m["name"] == mc.name),
         None,
@@ -193,16 +344,25 @@ def add_modality(
         omnimodal_config=omnimodal_config,
     )
 
+    if not had_post_processor:
+        # Every save_pretrained re-adds an empty TemplateProcessing on
+        # transformers 5.x, so a strip made before the saves is reasserted
+        # after the last of them.
+        declared = {tokenizer.bos_token, tokenizer.eos_token} - {None}
+
+        def _drop(state):
+            assert_droppable_post_processor(state.get("post_processor"), declared)
+            state["post_processor"] = None
+
+        _rewrite_backend_state(output_path, _drop)
+
     # Reload after all file mutations so the returned tokenizer matches disk.
     tokenizer = AutoTokenizer.from_pretrained(output_path, use_fast=True)
 
     # Verification
     _print_verification(tokenizer, mc, vocab_size)
 
-    return tokenizer, stats
-
-
-# ── Private helpers ──────────────────────────────────────────────────────────
+    return tokenizer
 
 
 def _resolve_modality(modality: str | ModalityConfig) -> ModalityConfig:
