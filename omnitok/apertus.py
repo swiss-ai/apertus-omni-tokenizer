@@ -199,9 +199,10 @@ def _add_think_aliases(save_path: str) -> None:
 def add_reasoning_aliases(save_path: str) -> None:
     """Retrofit the canonical 1.5 reasoning rewrites onto an existing tokenizer.
 
-    Installs the same rules the build recipe does: <think>/</think> aliased to
-    the <|inner_prefix|>/<|inner_suffix|> delimiters (flipping the targets to
-    normalized=True), then the REASONING_CLEANUP_RULES prepended in front.
+    Installs the same rules the build recipe does:
+    <think>/</think> aliased to the <|inner_prefix|>/<|inner_suffix|> delimiters,
+    which flips the targets to normalized=True,
+    then REASONING_CLEANUP_RULES prepended in front.
     Idempotent; raises ValueError if a delimiter is not an added token.
     """
     _add_think_aliases(save_path)

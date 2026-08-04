@@ -166,15 +166,16 @@ def add_modality_in_place(
 ) -> tuple[Any, dict[str, Any]]:
     """Add a modality by renaming the base's pre-baked reserve slots.
 
-    For bases that ship their own special-token pool (Apertus 2): the pool
-    slots in ``renames`` are renamed in place, the placeholders in
-    ``reused_ids`` (name -> pinned id) are reused as-is, and only content
-    tokens are appended. Raises if the base does not match the recipe.
+    For bases that ship their own special-token pool, as Apertus 2 does:
+    the pool slots in ``renames`` are renamed in place,
+    the placeholders in ``reused_ids`` (name -> pinned id) are reused as-is,
+    and only content tokens are appended.
+    Raises if the base does not match the recipe.
 
-    Modalities stack: pass one call's output as the next call's input, the
-    way the Apertus 2 recipe chains vision then audio. What is not supported
-    is re-running the same modality over its own output -- the pool slots it
-    renamed are gone, so the base assertion rejects it.
+    Modalities stack: pass one call's output as the next call's input,
+    the way the Apertus 2 recipe chains vision then audio.
+    What is not supported is re-running the same modality over its own output;
+    the pool slots it renamed are gone, so the base assertion rejects it.
 
     ``publish_structure_ids`` records each structure token's id in
     omnimodal_config.

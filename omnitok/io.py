@@ -114,13 +114,12 @@ def rename_reserved_tokens(
 ) -> None:
     """Rename tokens in the saved tokenizer files on disk; ids never move.
 
-    tokenizer.json is rewritten structurally (vocab keys and added-token
-    contents); the tokenizer_config.json and special_tokens_map.json mirrors
-    swap exactly-equal string values. Old tokens missing from the vocabulary
-    are skipped.
+    tokenizer.json is rewritten structurally, in vocab keys and added-token
+    contents; the tokenizer_config.json and special_tokens_map.json mirrors
+    swap exactly-equal string values.
+    Old tokens missing from the vocabulary are skipped.
 
-    Used to turn placeholders like <|RESERVED_OMNI_001|> into real names
-    like <|img_start|>.
+    Used to turn placeholders like <|RESERVED_OMNI_001|> into real names.
 
     Note: modifies files on disk, not the in-memory tokenizer object.
     Reload from disk after renaming to get the updated vocabulary.
@@ -560,12 +559,12 @@ def read_modality_info(
 ) -> dict[str, Any] | None:
     """Derive a single modality's summary from the tokenizer vocabulary.
 
-    Returns {name, offset, vocab_size, start_token, end_token} -- plus
-    structure_token_ids when ``publish_structure_ids`` is set -- or None
-    if the modality's content or structure tokens are not in the vocabulary.
-    ``publish_structure_ids`` adds the structure_token_ids map;
-    the Apertus 1.5 artifact predates that field, so it stays off
-    unless a recipe asks.
+    Returns {name, offset, vocab_size, start_token, end_token},
+    plus structure_token_ids when ``publish_structure_ids`` is set.
+    Returns None if the modality's tokens are not in the vocabulary.
+
+    The Apertus 1.5 artifact predates structure_token_ids,
+    so the map stays off unless a recipe asks for it.
     Walks the content tokens from index 0, verifying id = offset + index as it counts them —
     every config this feeds is only written for contiguous ids,
     which is what lets consumers look tokens up by offset arithmetic.
