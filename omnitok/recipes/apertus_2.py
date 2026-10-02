@@ -1,6 +1,7 @@
 """Pinned text-only Apertus 2 base and conversation-token builds.
 
-The base is copied byte-for-byte from preliminary_mul_200k; its origin and
+The base is copied byte-for-byte from preliminary_mul_200k in
+https://github.com/swiss-ai/apertus-tokenizer-development; its revision and
 file hashes are registered as Apertus_2 in omnitok/registry.py. The instruct
 variant renames seven reserved tokens without adding vocabulary or Jinja.
 Run ``python -m omnitok.cli build-apertus-2 --help`` for the CLI.
@@ -75,7 +76,7 @@ def build_instruct(input_path: str | Path, output_path: str | Path) -> Path:
         reserved = f"<SPECIAL_{token_id}>"
         if (
             vocab.get(reserved) != token_id
-            or added[token_id]["content"] != reserved
+            or added.get(token_id, {}).get("content") != reserved
             or glyph in vocab
         ):
             raise ValueError(f"reserved slot {token_id} differs from the pinned base")
@@ -123,4 +124,3 @@ def build_instruct(input_path: str | Path, output_path: str | Path) -> Path:
         },
     )
     return output
-

@@ -40,7 +40,9 @@ the scheme planned for Apertus 2.5.
 | `modalities[].start_token` / `end_token` | ids of the span delimiters |
 | `modalities[].structure_token_ids` | token name -> id for every structure token, including reused placeholders |
 
-Modalities are sorted by `offset`.
+Modalities are sorted by `offset`: the list follows the id order of the
+content ranges and the serialized config is deterministic.
+Look modalities up by `name` rather than by position.
 
 ## Contracts
 
@@ -53,19 +55,35 @@ Modalities are sorted by `offset`.
   `base_vocab_size`, in-place builds on the Apertus 2 base put them at low
   ids inside the base vocab (reused placeholders at 18/19, renamed pool slots
   at 27-39).
-- **In-place artifacts have no post-processor**:
-  encoding is exact (`add_special_tokens=True` inserts nothing),
+- **In-place recipes may drop the post-processor**:
+  with `strip_post_processor=True` the artifact has none,
+  so encoding is exact (`add_special_tokens=True` inserts nothing)
   and BOS/EOS belong to the chat template (apertus-program#420).
+  Without it, the base's BOS/EOS post-processor is kept.
 
 ## Special flags vs. named roles
 
 All omni tokens — structure *and* content — are added tokens
-with `special=True` (atomic, stripped by `skip_special_tokens`).
-Enrollment in the `additional_special_tokens` *named role* differs by version.
-1.5-era append builds enrolled everything, so fresh rebuilds on current
-transformers serialize ~135k entries into `special_tokens_map.json`
-and `all_special_ids`; in-place builds enroll nothing beyond the base roles,
-keeping `special_tokens_map.json` role-only.
+with `special=True`: each is matched as one token
+and dropped by `skip_special_tokens`.
+
+Separately, transformers keeps *named roles*:
+the base roles `bos_token`, `eos_token`, `pad_token` and `unk_token`,
+plus the `additional_special_tokens` list.
+Which omni tokens are enrolled in `additional_special_tokens`
+depends on the build scheme:
+
+- `add_modality` (append, Apertus 1.5) enrolls every omni token,
+  so its raw output lists ~135k of them and `all_special_ids` grows to match.
+  transformers 4.x writes them as `additional_special_tokens`
+  (in `special_tokens_map.json` and `tokenizer_config.json`);
+  5.x writes no `special_tokens_map.json` and puts them under
+  `extra_special_tokens` in `tokenizer_config.json`.
+  The 1.5 recipe's finalize step keeps only the base roles in
+  `special_tokens_map.json` and its eight role tokens as `extra_special_tokens`;
+  the committed 1.5 tokenizer reports 12 `all_special_ids`.
+- `add_modality_in_place` enrolls none,
+  so only the base roles are named.
 
 Consequences:
 

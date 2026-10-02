@@ -83,8 +83,8 @@ _BASE_ORIGIN = registry.get("Apertus_1_base").origin
 BASE_REPO = _BASE_ORIGIN.repo
 BASE_REVISION = _BASE_ORIGIN.revision
 # The build is parent-agnostic between the two Apertus 1 repos: the instruct
-# tokenizer (registered as Apertus_1) reproduces the same bytes, verified
-# 2026-07-29.
+# tokenizer (registered as Apertus_1) reproduces the same bytes
+# (tests/test_apertus_recipe.py).
 
 BASE_VOCAB_SIZE = 131072
 VISION_VOCAB_SIZE = 131072
@@ -145,8 +145,10 @@ REASONING_DELIMITER_TOKENS = (
 )
 
 
-# Multimodal role tokens surfaced to the Apertus1p5Processor, both as the
-# extra_special_tokens dict and as their top-level config mirrors.
+# Multimodal role tokens, written both as the extra_special_tokens dict and as
+# top-level config keys. transformers exposes each one as a tokenizer
+# attribute (e.g. tokenizer.eoa_token and tokenizer.eoa_token_id), which the
+# Apertus1p5Processor, vLLM and other consumers read.
 EXTRA_SPECIAL_TOKENS = {
     "audio_token": "<|audio|>",
     "boa_token": "<|audio_start|>",
@@ -306,6 +308,10 @@ def _finalize_apertus_1p5(output_path: str) -> None:
 
     _rewrite_backend_state(output_path, _keep_stt_flag_and_prepend_rules)
 
+    # An explicit allowlist: the artifact must not inherit save_pretrained's
+    # shape. Left out on purpose: the added_tokens_decoder mirror (24MB of
+    # duplication) and the backend/is_local/local_files_only keys that
+    # transformers 4.x cannot load.
     carried_keys = (
         "add_prefix_space", "added_tokens_count", "audio_begin_token",
         "audio_end_token", "audio_tokenizer", "base_vocab_size", "bos_token",
@@ -327,6 +333,8 @@ def _finalize_apertus_1p5(output_path: str) -> None:
             "eos_token": "</s>",
             "extra_special_tokens": dict(EXTRA_SPECIAL_TOKENS),
             "processor_class": "Apertus1p5Processor",
+            # transformers 5.x saves TokenizersBackend, which 4.x cannot
+            # load; PreTrainedTokenizerFast loads with both.
             "tokenizer_class": "PreTrainedTokenizerFast",
             # Canonical quirk: the base text vocab size, not the true total.
             "vocab_size": BASE_VOCAB_SIZE,

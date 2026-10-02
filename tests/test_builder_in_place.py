@@ -18,7 +18,7 @@ from omnitok.builder import (
     _strip_post_processor,
     add_modality_in_place,
 )
-from omnitok.modalities import VISION
+from omnitok.modalities import AUDIO, VISION
 from tokenizer_factory import make_word_level_tokenizer
 
 POOL = {
@@ -28,6 +28,11 @@ POOL = {
     "<SPECIAL_4>": "<|img_end_of_row|>",
     "<SPECIAL_5>": "<|img_end_of_frame|>",
     "<SPECIAL_6>": "<|img_generation_start|>",
+}
+AUDIO_POOL = {
+    "<SPECIAL_7>": "<|audio_start|>",
+    "<SPECIAL_8>": "<|audio_end|>",
+    "<SPECIAL_9>": "<|stt_transcribe|>",
 }
 CONTENT = 8
 
@@ -39,8 +44,9 @@ def _base(tmp_path, *, post_processor=True, drop=(), image_id=None):
         ("<unk>", "hi", "there"), bos_eos=True, added_tokens=added, added_special=True
     )
     if post_processor:
+        bos = tok.convert_tokens_to_ids("<s>")
         tok.backend_tokenizer.post_processor = TemplateProcessing(
-            single="<s> $A", pair="<s> $A $B", special_tokens=[("<s>", 1)]
+            single="<s> $A", pair="<s> $A $B", special_tokens=[("<s>", bos)]
         )
     out = str(tmp_path / "base")
     tok.save_pretrained(out)
@@ -49,6 +55,7 @@ def _base(tmp_path, *, post_processor=True, drop=(), image_id=None):
 
 def _build(tmp_path, base, image_id, **kw):
     out = str(tmp_path / "omni")
+    kw.setdefault("strip_post_processor", True)
     return add_modality_in_place(
         base, out, VISION, CONTENT,
         renames=dict(POOL), reused_ids={"<|image|>": image_id}, **kw
@@ -89,6 +96,14 @@ class TestInPlaceBuild:
         state = json.load(open(os.path.join(out, "tokenizer.json")))
         assert state["post_processor"] is None
 
+    def test_post_processor_is_kept_unless_the_recipe_strips_it(self, tmp_path):
+        base, image_id = _base(tmp_path)
+
+        _, out = _build(tmp_path, base, image_id, strip_post_processor=False)
+
+        tok = AutoTokenizer.from_pretrained(out)
+        assert tok.encode("hi")[0] == tok.bos_token_id
+
     def test_structure_token_ids_are_published_on_request(self, tmp_path):
         base, image_id = _base(tmp_path)
 
@@ -107,6 +122,67 @@ class TestInPlaceBuild:
         cfg = json.load(open(os.path.join(out, "tokenizer_config.json")))
         (vision,) = cfg["omnimodal_config"]["modalities"]
         assert "structure_token_ids" not in vision
+
+
+class TestStackedInPlaceBuild:
+    """Vision, then audio, each renaming its own slots of one shared pool."""
+
+    @pytest.fixture
+    def stacked(self, tmp_path):
+        added = list(POOL) + list(AUDIO_POOL) + ["<|image|>", "<|audio|>"]
+        tok = make_word_level_tokenizer(
+            ("<unk>", "hi"), bos_eos=True, added_tokens=added, added_special=True
+        )
+        base = str(tmp_path / "base")
+        tok.save_pretrained(base)
+        pinned = {t: tok.convert_tokens_to_ids(t) for t in added}
+        common = dict(strip_post_processor=True, publish_structure_ids=True)
+        vision = str(tmp_path / "vision")
+        add_modality_in_place(
+            base, vision, VISION, CONTENT, renames=dict(POOL),
+            reused_ids={"<|image|>": pinned["<|image|>"]}, **common,
+        )
+        out = str(tmp_path / "vision_audio")
+        add_modality_in_place(
+            vision, out, AUDIO, CONTENT, renames=dict(AUDIO_POOL),
+            reused_ids={"<|audio|>": pinned["<|audio|>"]}, **common,
+        )
+        return out, pinned, len(tok)
+
+    def test_both_modalities_keep_their_slots_and_get_disjoint_content(self, stacked):
+        out, pinned, base_size = stacked
+        cfg = json.load(open(os.path.join(out, "tokenizer_config.json")))
+        vision, audio = cfg["omnimodal_config"]["modalities"]
+        assert (vision["name"], vision["offset"]) == ("vision", base_size)
+        assert (audio["name"], audio["offset"]) == ("audio", base_size + CONTENT)
+        assert vision["vocab_size"] == audio["vocab_size"] == CONTENT
+
+        for pool, published in ((POOL, vision), (AUDIO_POOL, audio)):
+            for slot, name in pool.items():
+                assert published["structure_token_ids"][name] == pinned[slot], name
+        assert not (
+            set(vision["structure_token_ids"].values())
+            & set(audio["structure_token_ids"].values())
+        )
+
+    def test_the_first_modality_survives_the_second(self, stacked):
+        out, pinned, _ = stacked
+        tok = AutoTokenizer.from_pretrained(out)
+        for slot, name in POOL.items():
+            assert tok.convert_tokens_to_ids(name) == pinned[slot], name
+        assert tok.encode("<image>", add_special_tokens=False) == [pinned["<|image|>"]]
+        assert tok.encode("<audio>", add_special_tokens=False) == [pinned["<|audio|>"]]
+
+    def test_rerunning_a_modality_over_its_own_output_is_rejected(
+        self, stacked, tmp_path
+    ):
+        out, pinned, _ = stacked
+        with pytest.raises(ValueError, match="missing reserve slots"):
+            add_modality_in_place(
+                out, str(tmp_path / "again"), VISION, CONTENT, renames=dict(POOL),
+                reused_ids={"<|image|>": pinned["<|image|>"]},
+                strip_post_processor=True,
+            )
 
 
 class TestInPlaceBaseAssertions:

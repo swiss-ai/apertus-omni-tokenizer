@@ -4,10 +4,8 @@ import pytest
 
 from omnitok import add_modality, registry
 
-# Hub repos are mutable; pin the fixture base so runs are reproducible.
-_BASE = registry.get("Apertus_1_base").origin
-BASE_TOKENIZER = _BASE.repo
-BASE_REVISION = _BASE.revision
+# The checked-in Apertus 1 base: pinned and offline.
+BASE_TOKENIZER = str(registry.artifact_dir("Apertus_1_base"))
 SMALL_VOCAB = 32
 
 
@@ -15,8 +13,7 @@ SMALL_VOCAB = 32
 def vision_tokenizer(tmp_path_factory):
     """Vision-only tokenizer with small vocab, created once per session."""
     out = str(tmp_path_factory.mktemp("vision"))
-    add_modality(BASE_TOKENIZER, out, "vision", SMALL_VOCAB,
-                 revision=BASE_REVISION)
+    add_modality(BASE_TOKENIZER, out, "vision", SMALL_VOCAB)
     return out
 
 
@@ -24,8 +21,7 @@ def vision_tokenizer(tmp_path_factory):
 def audio_tokenizer(tmp_path_factory):
     """Audio-only tokenizer with small vocab, created once per session."""
     out = str(tmp_path_factory.mktemp("audio"))
-    add_modality(BASE_TOKENIZER, out, "audio", SMALL_VOCAB,
-                 revision=BASE_REVISION)
+    add_modality(BASE_TOKENIZER, out, "audio", SMALL_VOCAB)
     return out
 
 

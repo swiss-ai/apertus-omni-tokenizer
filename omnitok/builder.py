@@ -161,6 +161,7 @@ def add_modality_in_place(
     *,
     renames: dict[str, str],
     reused_ids: dict[str, int],
+    strip_post_processor: bool,
     expected_base_vocab_size: int | None = None,
     publish_structure_ids: bool = False,
 ) -> tuple[Any, dict[str, Any]]:
@@ -173,10 +174,13 @@ def add_modality_in_place(
     Raises if the base does not match the recipe.
 
     Modalities stack: pass one call's output as the next call's input,
-    the way the Apertus 2 recipe chains vision then audio.
+    e.g. vision, then audio.
     What is not supported is re-running the same modality over its own output;
     the pool slots it renamed are gone, so the base assertion rejects it.
 
+    ``strip_post_processor`` is the recipe's choice: set it when the chat
+    template owns BOS/EOS and encoding must be exact. The base's BOS/EOS post-processor is then dropped
+    from the written artifact.
     ``publish_structure_ids`` records each structure token's id in
     omnimodal_config.
 
@@ -202,7 +206,8 @@ def add_modality_in_place(
     print(f"\nInput tokenizer: {input_tokenizer_path}")
     print(f"Base vocab size (text-only): {base_vocab_size:,}")
 
-    _strip_post_processor(tokenizer)
+    if strip_post_processor:
+        _strip_post_processor(tokenizer)
     _assert_in_place_base(tokenizer, renames, reused_ids)
 
     stats = _init_stats(input_tokenizer_path, mc, base_vocab_size,
@@ -264,7 +269,7 @@ def _assert_in_place_base(
     renames: dict[str, str],
     reused_ids: dict[str, int],
 ) -> None:
-    """The base must carry the recipe's pool slots and placeholders."""
+    """Verify the base tokenizer carries the recipe's pool slots and placeholders."""
     vocab = tokenizer.get_vocab()
     added = {t.content for t in tokenizer.added_tokens_decoder.values()}
     missing = [s for s in renames if s not in added]

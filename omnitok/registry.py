@@ -150,12 +150,29 @@ def artifact_dir(name: str) -> Path:
 
 
 def committed_files(name: str) -> dict[str, Path]:
-    """Map each committed file name of ``name`` to its path in the repo."""
-    files = {p.name: p for p in sorted(artifact_dir(name).iterdir()) if p.is_file()}
-    template = REPO_ROOT / "chat_templates" / name / CHAT_TEMPLATE
-    if template.is_file():
-        files[CHAT_TEMPLATE] = template
+    """Map each committed file name of ``name`` to its path in the repo.
+
+    Raises ValueError for files the pins would miss: a subdirectory, anything
+    but chat_template.jinja under chat_templates/<name>/, or a chat template
+    in both places. Hidden files such as .DS_Store are ignored.
+    """
+    files = {}
+    for path in visible_entries(artifact_dir(name)):
+        if not path.is_file():
+            raise ValueError(f"unexpected subdirectory {path}")
+        files[path.name] = path
+    for path in visible_entries(REPO_ROOT / "chat_templates" / name):
+        if path.name != CHAT_TEMPLATE or CHAT_TEMPLATE in files:
+            raise ValueError(f"unexpected chat template file {path}")
+        files[CHAT_TEMPLATE] = path
     return files
+
+
+def visible_entries(directory: Path) -> list[Path]:
+    """The non-hidden entries of ``directory``, sorted; none if it is absent."""
+    if not directory.is_dir():
+        return []
+    return sorted(p for p in directory.iterdir() if not p.name.startswith("."))
 
 
 def load_recipe(entry: Derived) -> Callable[..., object]:

@@ -20,8 +20,11 @@ MANIFESTS = sorted((ROOT / "validation").glob("*.md5"))
 def test_every_artifact_directory_is_registered():
     names = {entry.name for entry in registry.TOKENIZERS}
     assert len(names) == len(registry.TOKENIZERS), "duplicate registry names"
-    assert {p.name for p in (ROOT / "tokenizers").iterdir() if p.is_dir()} == names
-    assert {p.name for p in (ROOT / "chat_templates").iterdir() if p.is_dir()} <= names
+    tokenizer_dirs = registry.visible_entries(ROOT / "tokenizers")
+    template_dirs = registry.visible_entries(ROOT / "chat_templates")
+    assert all(p.is_dir() for p in tokenizer_dirs + template_dirs), "stray files"
+    assert {p.name for p in tokenizer_dirs} == names
+    assert {p.name for p in template_dirs} <= names
     assert {p.stem for p in MANIFESTS} <= names
 
 
@@ -53,8 +56,14 @@ def test_derived_rebuilds_byte_for_byte(entry, tmp_path):
 
 
 @pytest.mark.parametrize("manifest", MANIFESTS, ids=lambda p: p.stem)
-def test_deployment_manifest_matches_committed_files(manifest):
+def test_deployment_manifest_covers_the_committed_files(manifest):
     files = registry.committed_files(manifest.stem)
+    pinned = {}
     for line in manifest.read_text().splitlines():
         digest, name = line.split()
+        pinned[name] = digest
+    # generation_config.json differs per checkpoint; validate_model.sh checks
+    # its fields instead of its checksum.
+    assert set(pinned) == set(files) - {"generation_config.json"}
+    for name, digest in pinned.items():
         assert hashlib.md5(files[name].read_bytes()).hexdigest() == digest, name

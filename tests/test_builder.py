@@ -10,6 +10,7 @@ from tokenizer_factory import make_word_level_tokenizer
 
 from omnitok import (
     add_modality,
+    registry,
     detect_existing_modalities,
     get_content_token_id,
     load_modality_mapping,
@@ -20,7 +21,7 @@ from omnitok.io import (
 )
 from omnitok.modalities import MODALITY_REGISTRY, VISION, AUDIO
 
-BASE_TOKENIZER = "swiss-ai/Apertus-8B-2509"
+BASE_TOKENIZER = str(registry.artifact_dir("Apertus_1_base"))
 SMALL_VOCAB = 32
 
 

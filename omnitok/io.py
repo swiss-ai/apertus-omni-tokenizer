@@ -390,8 +390,8 @@ def finalize_tokenizer_config(
     ``save_pretrained`` emits whatever shape the running transformers prefers.
     5.x writes a TokenizersBackend class plus fossils that 4.x cannot load;
     4.x mirrors every added token into ``added_tokens_decoder``.
-    An allowlist plus explicit overrides ties the output to the recipe,
-    not to the build environment.
+    An allowlist (``carried_keys``) plus explicit overrides ties the output
+    to the recipe, not to the build environment.
 
     Writes chat_template.jinja only if the built config carries a template;
     set ``require_chat_template`` where its absence means

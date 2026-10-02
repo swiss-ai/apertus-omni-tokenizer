@@ -102,7 +102,8 @@ def main() -> None:
     p_v15.add_argument("--base-tokenizer", default=BASE_REPO,
                        help=f"Apertus 1 tokenizer (path or HF ID, default: {BASE_REPO}).")
     p_v15.add_argument("--revision", default=BASE_REVISION,
-                       help=f"Hub commit for --base-tokenizer (default: {BASE_REVISION[:12]}).")
+                       help=f"Hub commit for --base-tokenizer; ignored for local paths "
+                            f"(default: {BASE_REVISION[:12]}).")
     p_v15.add_argument("--chat-template", default=None,
                        help="Chat template file (default: the checked-in Apertus 1.5 template).")
     p_v15.add_argument("--work-dir", default=None,
