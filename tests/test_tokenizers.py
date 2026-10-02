@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 from transformers import AutoTokenizer
 
-from omnitok.apertus import REASONING_DELIMITER_TOKENS
+from omnitok.recipes.apertus_1p5 import REASONING_DELIMITER_TOKENS
 from omnitok.io import mark_tokens_non_special
 
 TOKENIZERS_DIR = Path(__file__).resolve().parent.parent / "tokenizers"

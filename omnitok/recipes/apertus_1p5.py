@@ -62,10 +62,10 @@ from typing import Any
 
 from transformers import AutoTokenizer
 
-from . import registry
-from .builder import add_modality
-from .instruct import create_instruct_tokenizer
-from .io import (
+from .. import registry
+from ..builder import add_modality
+from ..instruct import create_instruct_tokenizer
+from ..io import (
     _prepend_rules,
     finalize_tokenizer_config,
     _resolve_tokenizer_path,
@@ -179,9 +179,8 @@ _VERIFY_ENCODINGS = {
 
 
 def _default_chat_template_path() -> str:
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(
-        repo_root, "chat_templates", "Apertus_1p5", "chat_template.jinja"
+        registry.REPO_ROOT, "chat_templates", "Apertus_1p5", "chat_template.jinja"
     )
 
 

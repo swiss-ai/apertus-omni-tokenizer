@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from omnitok.versions.apertus_2 import (
+from omnitok.recipes.apertus_2 import (
     CONTROLS,
     SOURCE_SHA256,
     VOCAB_SIZE,

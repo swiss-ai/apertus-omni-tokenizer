@@ -11,7 +11,7 @@ import pytest
 from tokenizers import normalizers
 from transformers import AddedToken, AutoTokenizer
 
-from omnitok.apertus import add_reasoning_aliases
+from omnitok.recipes.apertus_1p5 import add_reasoning_aliases
 from omnitok.io import add_token_alias
 from tokenizer_factory import make_word_level_tokenizer
 

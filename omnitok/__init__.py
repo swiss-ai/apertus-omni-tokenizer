@@ -1,6 +1,6 @@
 """omnitok — Create omnimodal tokenizers."""
 
-from .apertus import (
+from .recipes.apertus_1p5 import (
     add_reasoning_aliases,
     build_apertus_1p5,
     prepare_apertus_1p5_text_base,

@@ -105,7 +105,7 @@ TOKENIZERS: tuple[Entry, ...] = (
     Derived(
         "Apertus_1p5",
         parent="Apertus_1_base",
-        recipe="omnitok.apertus:build_from_parent",
+        recipe="omnitok.recipes.apertus_1p5:build_from_parent",
         note="Text renames, vision + audio modalities and the hand-maintained "
         "chat template under chat_templates/Apertus_1p5/.",
     ),
@@ -126,7 +126,7 @@ TOKENIZERS: tuple[Entry, ...] = (
     Derived(
         "Apertus_2_instruct",
         parent="Apertus_2",
-        recipe="omnitok.versions.apertus_2:build_instruct",
+        recipe="omnitok.recipes.apertus_2:build_instruct",
         note="Seven conversation controls in reserved slots 40-46.",
     ),
 )

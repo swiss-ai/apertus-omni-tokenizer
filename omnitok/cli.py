@@ -24,7 +24,7 @@ def cmd_add_modality(args: argparse.Namespace) -> None:
 
 
 def cmd_build_apertus_1p5(args: argparse.Namespace) -> None:
-    from .apertus import build_apertus_1p5
+    from .recipes.apertus_1p5 import build_apertus_1p5
 
     build_apertus_1p5(
         output_path=args.output_path,
@@ -36,7 +36,7 @@ def cmd_build_apertus_1p5(args: argparse.Namespace) -> None:
 
 
 def cmd_build_apertus_2(args: argparse.Namespace) -> None:
-    from .versions import apertus_2
+    from .recipes import apertus_2
 
     build = apertus_2.build_base if args.variant == "base" else apertus_2.build_instruct
     print(build(args.input_tokenizer, args.output_path))
@@ -91,7 +91,7 @@ def main() -> None:
     p_add.set_defaults(func=cmd_add_modality)
 
     # ── build-apertus-1p5 ───────────────────────────────────────────────────
-    from .apertus import BASE_REPO, BASE_REVISION
+    from .recipes.apertus_1p5 import BASE_REPO, BASE_REVISION
 
     p_v15 = sub.add_parser(
         "build-apertus-1p5",
