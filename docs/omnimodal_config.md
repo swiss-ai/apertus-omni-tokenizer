@@ -5,6 +5,9 @@ between built omni-tokenizers and their consumers
 (Megatron-LM, serving, data pipelines).
 It is derived from the tokenizer vocabulary at build time,
 and verified on every write path.
+The shipped Apertus 2 tokenizers are text-only and carry none;
+the in-place values below come from the multimodal Apertus 2 prototype (#34),
+the scheme planned for Apertus 2.5.
 
 ## Fields
 
@@ -47,9 +50,10 @@ Modalities are sorted by `offset`.
 - **Structure tokens resolve by name**, via `structure_token_ids`
   or the tokenizer itself. Do not assume geometry:
   Apertus 1.5's structure tokens sit in a contiguous block above
-  `base_vocab_size`, Apertus 2's sit at low ids inside the base vocab
-  (reused placeholders at 18/19, renamed pool slots at 27-39).
-- **Apertus 2 artifacts have no post-processor**:
+  `base_vocab_size`, in-place builds on the Apertus 2 base put them at low
+  ids inside the base vocab (reused placeholders at 18/19, renamed pool slots
+  at 27-39).
+- **In-place artifacts have no post-processor**:
   encoding is exact (`add_special_tokens=True` inserts nothing),
   and BOS/EOS belong to the chat template (apertus-program#420).
 
@@ -60,7 +64,7 @@ with `special=True` (atomic, stripped by `skip_special_tokens`).
 Enrollment in the `additional_special_tokens` *named role* differs by version.
 1.5-era append builds enrolled everything, so fresh rebuilds on current
 transformers serialize ~135k entries into `special_tokens_map.json`
-and `all_special_ids`; Apertus 2 builds enroll nothing beyond the base roles,
+and `all_special_ids`; in-place builds enroll nothing beyond the base roles,
 keeping `special_tokens_map.json` role-only.
 
 Consequences:
@@ -78,4 +82,4 @@ and `modalities[].{name, offset, vocab_size}` into training args;
 per-modality loss weighting and vocab padding derive from those.
 Its goldfish exemption currently assumes the 1.5 geometry
 (a contiguous span above `base_vocab_size`), and must switch to
-the id-set derivation above for Apertus 2 tokenizers.
+the id-set derivation above for in-place tokenizers.

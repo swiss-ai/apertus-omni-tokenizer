@@ -73,16 +73,22 @@ EXPECTED = {
     "Apertus_2": {
         "encode": {
             "<|image|>": [18],
-            "<image>": [18],
             "<|audio|>": [19],
-            "<audio>": [19],
-            "<|img_start|>": [27],
-            "<|audio_annotate|>": [39],
-            "<|visual token 0|>": [200064],
-            "<|audio token 4095|>": [335231],
+            "<SPECIAL_27>": [27],
+            "<SPECIAL_40>": [40],
         },
-        "decode": {18: "<|image|>", 27: "<|img_start|>", 200064: "<|visual token 0|>"},
+        "decode": {18: "<|image|>", 27: "<SPECIAL_27>"},
         "eos": "</s>",
+    },
+    "Apertus_2_instruct": {
+        "encode": {
+            "<|in|>": [40],
+            "<|out|>": [42],
+            "<|wait|>": [45],
+            "<|pad|>": [46],
+        },
+        "decode": {42: "<|out|>", 45: "<|wait|>"},
+        "eos": "<|wait|>",
     },
 }
 

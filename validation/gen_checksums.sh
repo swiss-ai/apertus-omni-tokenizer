@@ -51,9 +51,14 @@ gen_manifest Apertus_1 \
   tokenizer_config.json    tokenizers/Apertus_1/tokenizer_config.json \
   special_tokens_map.json  tokenizers/Apertus_1/special_tokens_map.json
 
-# Apertus 2 is the base omni tokenizer (pretraining);
-# its chat template lands with the instruct variant once decided upstream.
 gen_manifest Apertus_2 \
   tokenizer.json           tokenizers/Apertus_2/tokenizer.json \
   tokenizer_config.json    tokenizers/Apertus_2/tokenizer_config.json \
-  special_tokens_map.json  tokenizers/Apertus_2/special_tokens_map.json
+  special_tokens_map.json  tokenizers/Apertus_2/special_tokens_map.json \
+  source.json              tokenizers/Apertus_2/source.json
+
+gen_manifest Apertus_2_instruct \
+  tokenizer.json           tokenizers/Apertus_2_instruct/tokenizer.json \
+  tokenizer_config.json    tokenizers/Apertus_2_instruct/tokenizer_config.json \
+  special_tokens_map.json  tokenizers/Apertus_2_instruct/special_tokens_map.json \
+  apertus_encoding.json    tokenizers/Apertus_2_instruct/apertus_encoding.json

@@ -1,101 +1,137 @@
-"""Apertus 2 omni build recipe.
+"""Pinned text-only Apertus 2 base and conversation-token builds.
 
-Base: ``preliminary_mul_200k`` (cmeister/apertus_v2_tokenizer,
-decided in swiss-ai/apertus-program#429 on 2026-06-30).
-200,064 text tokens, with pre-baked ``<|image|>``/``<|audio|>``
-and a ``<SPECIAL_*>`` reserve pool.
-
-The tables below are the spec: the build renames pool slots in place
-(ids never move), reuses the pre-baked placeholders,
-and appends only content tokens.
-The build asserts the base matches and fails loudly on drift;
-ids verified against the published omni_mul200k_vision_audio_335232 artifact.
-
-Base tokenizer only.
-The instruct stage is not defined yet -- see ``build_instruct``.
+The base is copied byte-for-byte from preliminary_mul_200k. The instruct
+variant renames seven reserved tokens without adding vocabulary or Jinja.
+Run ``python -m omnitok.cli build-apertus-2 --help`` for the CLI.
 """
 
 from __future__ import annotations
 
-from ..builder import add_modality_in_place
-from ..io import finalize_tokenizer_config
+import hashlib
+import json
+from pathlib import Path
+from typing import Any
 
-BASE_VOCAB_SIZE = 200_064
-VISION_VOCAB_SIZE = 131_072
-AUDIO_VOCAB_SIZE = 4_096
-TOTAL_VOCAB_SIZE = 335_232
-
-VISION_REUSED_IDS = {"<|image|>": 18}
-AUDIO_REUSED_IDS = {"<|audio|>": 19}
-
-VISION_RENAMES = {
-    "<SPECIAL_27>": "<|img_start|>",
-    "<SPECIAL_28>": "<|img_end|>",
-    "<SPECIAL_29>": "<|img_token_start|>",
-    "<SPECIAL_30>": "<|img_end_of_row|>",
-    "<SPECIAL_31>": "<|img_end_of_frame|>",
-    "<SPECIAL_32>": "<|img_generation_start|>",
+SOURCE_REPOSITORY = "https://github.com/swiss-ai/apertus-tokenizer-development"
+SOURCE_REVISION = "28ad57a2757f6f72edb0def57ee725b6812f2df3"
+SOURCE_PATH = "preliminary_mul_200k"
+SOURCE_SHA256 = {
+    "tokenizer.json": "cd403d3f219e2433e3f78b32644b8e6a6134668e15138e6546360330635a96b9",
+    "tokenizer_config.json": "7e6b68d5a41fd06d399143b7591df15abf7ae2846fa8f444f66f3d5edee5996f",
+    "special_tokens_map.json": "816ec96e37c6d15e3cbc535dc146c898a7218f209fc154384f31fc1e6ad31ba5",
 }
-
-AUDIO_RENAMES = {
-    "<SPECIAL_33>": "<|audio_start|>",
-    "<SPECIAL_34>": "<|audio_end|>",
-    "<SPECIAL_35>": "<|stt_transcribe|>",
-    "<SPECIAL_36>": "<|stt_continue|>",
-    "<SPECIAL_37>": "<|tts_continue|>",
-    "<SPECIAL_38>": "<|stt_translate|>",
-    "<SPECIAL_39>": "<|audio_annotate|>",
+PROFILE_REVISION = "85874b84605f2a0452d53fe5874cc5eddac1b7f4"
+VOCAB_SIZE = 200_064
+CONTROLS = {
+    "<|in|>": 40,
+    "<|/in|>": 41,
+    "<|out|>": 42,
+    "<|/out|>": 43,
+    "<|hdr|>": 44,
+    "<|wait|>": 45,
+    "<|pad|>": 46,
 }
 
 
-# An explicit allowlist: the artifact must not inherit save_pretrained's shape.
-# Absent on purpose: the added_tokens_decoder mirror (24MB of duplication),
-# and the backend/is_local/local_files_only fossils that 4.x cannot load.
-CARRIED_CONFIG_KEYS = (
-    "add_prefix_space", "added_tokens_count", "base_vocab_size", "bos_token",
-    "clean_up_tokenization_spaces", "eos_token", "model_input_names",
-    "model_max_length", "omnimodal_config", "pad_token", "padding_side",
-    "unk_token",
-)
-
-
-def build(input_tokenizer_path: str, output_path: str):
-    """Build the Apertus 2 omni tokenizer from the pinned text base."""
-    add_modality_in_place(
-        input_tokenizer_path, output_path, "vision", VISION_VOCAB_SIZE,
-        renames=VISION_RENAMES,
-        reused_ids=VISION_REUSED_IDS,
-        expected_base_vocab_size=BASE_VOCAB_SIZE,
-        publish_structure_ids=True,
-    )
-    tokenizer, stats = add_modality_in_place(
-        output_path, output_path, "audio", AUDIO_VOCAB_SIZE,
-        renames=AUDIO_RENAMES,
-        reused_ids=AUDIO_REUSED_IDS,
-        expected_base_vocab_size=BASE_VOCAB_SIZE,
-        publish_structure_ids=True,
-    )
-    if len(tokenizer) != TOTAL_VOCAB_SIZE:
+def _read_source(
+    input_path: str | Path, output_path: str | Path
+) -> tuple[Path, dict[str, bytes]]:
+    source, output = Path(input_path).resolve(), Path(output_path).resolve()
+    if source == output or source in output.parents or output in source.parents:
         raise ValueError(
-            f"built {len(tokenizer):,} tokens, expected {TOTAL_VOCAB_SIZE:,}"
+            "source and output directories must be separate and non-nested"
         )
+    if output.exists() and (not output.is_dir() or any(output.iterdir())):
+        raise ValueError("output directory must be empty or absent")
+    files = {name: (source / name).read_bytes() for name in SOURCE_SHA256}
+    for name, raw in files.items():
+        if hashlib.sha256(raw).hexdigest() != SOURCE_SHA256[name]:
+            raise ValueError(f"{name}: checksum differs from the pinned text base")
+    return output, files
 
-    finalize_tokenizer_config(
-        output_path,
-        carried_keys=CARRIED_CONFIG_KEYS,
-        overrides={
-            "tokenizer_class": "PreTrainedTokenizerFast",
-            "vocab_size": TOTAL_VOCAB_SIZE,
+
+def _write_json(path: Path, value: Any) -> None:
+    path.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+
+
+def build_base(input_path: str | Path, output_path: str | Path) -> Path:
+    """Copy the verified upstream base unchanged and record its provenance."""
+    output, files = _read_source(input_path, output_path)
+    output.mkdir(parents=True, exist_ok=True)
+    for name, raw in files.items():
+        (output / name).write_bytes(raw)
+    _write_json(
+        output / "source.json",
+        {
+            "repository": SOURCE_REPOSITORY,
+            "revision": SOURCE_REVISION,
+            "path": SOURCE_PATH,
+            "sha256": SOURCE_SHA256,
         },
     )
-    return tokenizer, stats
+    return output
 
 
-def build_instruct(input_tokenizer_path: str, output_path: str):
-    """Not implemented: the Apertus 2 instruct conventions are undecided."""
-    raise NotImplementedError(
-        "The Apertus 2 instruct tokenizer is not defined yet: no chat template "
-        "under chat_templates/Apertus_2/, and the eos convention and SFT "
-        "begin/end sequences have not been decided. build() produces the base "
-        "omni tokenizer; add the instruct stage here once those are settled."
+def build_instruct(input_path: str | Path, output_path: str | Path) -> Path:
+    """Derive exact-text conversation encoding from the pinned text base."""
+    output, files = _read_source(input_path, output_path)
+    data = json.loads(files["tokenizer.json"])
+    vocab = data["model"]["vocab"]
+    added = {entry["id"]: entry for entry in data["added_tokens"]}
+    if len(vocab) != VOCAB_SIZE:
+        raise ValueError("unexpected text vocabulary size")
+    for glyph, token_id in CONTROLS.items():
+        reserved = f"<SPECIAL_{token_id}>"
+        if (
+            vocab.get(reserved) != token_id
+            or added[token_id]["content"] != reserved
+            or glyph in vocab
+        ):
+            raise ValueError(f"reserved slot {token_id} differs from the pinned base")
+        del vocab[reserved]
+        vocab[glyph] = token_id
+        added[token_id].update(content=glyph, special=True, normalized=False)
+    # Literal glyphs and decomposed Unicode are data; controls are inserted by
+    # the consuming library with ordinary-text special recognition disabled.
+    data.update(normalizer=None, post_processor=None, padding=None, truncation=None)
+    config = json.loads(files["tokenizer_config.json"])
+    config.pop("added_tokens_decoder", None)
+    config.update(
+        eos_token="<|wait|>",
+        pad_token="<|pad|>",
+        add_bos_token=False,
+        add_eos_token=False,
     )
+    roles = json.loads(files["special_tokens_map.json"])
+    for name, glyph in (("eos_token", "<|wait|>"), ("pad_token", "<|pad|>")):
+        roles[name]["content"] = glyph
+    output.mkdir(parents=True, exist_ok=True)
+    _write_json(output / "tokenizer.json", data)
+    _write_json(output / "tokenizer_config.json", config)
+    _write_json(output / "special_tokens_map.json", roles)
+    _write_json(
+        output / "generation_config.json", {"eos_token_id": 45, "pad_token_id": 46}
+    )
+    _write_json(
+        output / "apertus_encoding.json",
+        {
+            "schema_version": 1,
+            "profile": "apertus_2",
+            "profile_revision": PROFILE_REVISION,
+            "tokenizer_sha256": hashlib.sha256(
+                (output / "tokenizer.json").read_bytes()
+            ).hexdigest(),
+            "controls": CONTROLS,
+            "special_token_ids": sorted(
+                token["id"] for token in data["added_tokens"] if token["special"]
+            ),
+            "tokenizers_version": ">=0.23.2,<0.24",
+            "text_mode": "verbatim",
+            "source_revision": SOURCE_REVISION,
+            "source_sha256": SOURCE_SHA256["tokenizer.json"],
+        },
+    )
+    return output
+

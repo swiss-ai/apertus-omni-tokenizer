@@ -6,7 +6,67 @@ release) from the Apertus 1 base
 ([swiss-ai/Apertus-8B-2509](https://huggingface.co/swiss-ai/Apertus-8B-2509)),
 and documents the chat templates and canonical tokenizer files for both releases.
 
-## Building the tokenizers
+## Apertus 2: text-only base and instruct
+
+`tokenizers/Apertus_2/` is the byte-identical 200,064-token text base from
+[`preliminary_mul_200k`](https://github.com/swiss-ai/apertus-tokenizer-development/tree/28ad57a2757f6f72edb0def57ee725b6812f2df3/preliminary_mul_200k).
+`source.json` pins its revision and SHA-256 hashes. It retains the upstream NFC
+normalizer and BOS/EOS postprocessor. No vision/audio codebook vocabulary or
+modality metadata is added. Existing upstream special tokens, including the
+image/audio placeholders, remain at their original IDs.
+
+`tokenizers/Apertus_2_instruct/` derives the same-size conversation tokenizer:
+
+| ID | Reserved name replaced by |
+|----|---------------------------|
+| 40 | `<\|in\|>`                |
+| 41 | `<\|/in\|>`               |
+| 42 | `<\|out\|>`               |
+| 43 | `<\|/out\|>`              |
+| 44 | `<\|hdr\|>`               |
+| 45 | `<\|wait\|>`              |
+| 46 | `<\|pad\|>`               |
+
+All other vocabulary IDs and BPE merges stay unchanged. The instruct variant
+removes normalization and automatic BOS/EOS insertion, uses wait as EOS and
+ID 46 for padding, and writes `generation_config.json` and the
+`apertus_encoding.json` binding consumed by `apertus-common`. The inherited
+model-length setting is unspecified; consumers configure the checkpoint's limit.
+
+There is no Jinja template. `apertus-common` renders messages, inserts controls
+and disables special-token recognition while encoding ordinary text. Direct
+Hugging Face tokenization alone does not provide that payload isolation.
+The binding targets profile revision `85874b84605f2a0452d53fe5874cc5eddac1b7f4`
+and `tokenizers>=0.23.2,<0.24` (tested with 0.23.2).
+
+Build into empty, separate output directories; both operations verify all three
+upstream source files before writing and refuse source/output overlap:
+
+```sh
+# Copy a checkout of the pinned upstream text source without changing its bytes.
+python -m omnitok.cli build-apertus-2 base \
+  --input-tokenizer /path/to/preliminary_mul_200k --output-path /tmp/Apertus_2
+
+# Rebuild offline from the committed base.
+python -m omnitok.cli build-apertus-2 instruct \
+  --input-tokenizer tokenizers/Apertus_2 --output-path /tmp/Apertus_2_instruct
+
+pytest tests/test_apertus_2_recipe.py tests/test_apertus_2_validation.py -v
+bash validation/gen_checksums.sh
+```
+
+`validate_model.sh MODEL_PATH Apertus_2_instruct` checks EOS 45 and padding 46
+with Python 3 while preserving checkpoint-specific generation settings. These
+fields are validated separately from the tokenizer checksum manifest.
+
+Apertus 1/1.5 artifacts are unchanged. Multimodal support is planned for
+Apertus 2.5: `add_modality_in_place` provides the in-place allocation it needs
+(see [docs/omnimodal_config.md](docs/omnimodal_config.md)), and the multimodal
+Apertus 2 prototype recipe from
+[PR #34](https://github.com/swiss-ai/apertus-omni-tokenizer/pull/34) remains in
+the history of `omnitok/versions/apertus_2.py`.
+
+## Building the Apertus 1.5 tokenizer
 
 ```bash
 # From the pinned canonical base on the Hub
@@ -14,9 +74,6 @@ python -m omnitok.cli build-apertus-1p5 --output-path ./Apertus_1p5
 
 # Offline, from the checked-in copy of the base
 python -m omnitok.cli build-apertus-1p5 --output-path ./Apertus_1p5 --base-tokenizer tokenizers/Apertus_1
-
-# Apertus 2: rename the base's pre-baked <SPECIAL_*> pool in place, append content
-python -m omnitok.cli build-apertus-2 --input-tokenizer <base> --output-path ./Apertus_2
 ```
 
 Or as a library:
@@ -49,9 +106,10 @@ under `chat_templates/Apertus_1p5/`) and rebuild.
 [base+200 .. ]          content tokens (appended per modality in order added)
 ```
 
-Apertus 2 allocates differently: its base ships a `<SPECIAL_*>` pool, so the
-structure tokens are renamed in place at low ids (18-39) inside the text vocab
-and only content tokens are appended.
+A base that ships a `<SPECIAL_*>` reserve pool, like Apertus 2's, uses
+`add_modality_in_place` instead: structure tokens are renamed in place at low
+ids inside the text vocab and only content tokens are appended. The shipped
+Apertus 2 tokenizers are text-only.
 See [docs/omnimodal_config.md](docs/omnimodal_config.md) for both schemes.
 
 ## Reserved slot allocation (Apertus 1.5)
@@ -142,7 +200,7 @@ apertus-omni-tokenizer/
 │   ├── modalities.py    # ModalityConfig dataclass, built-in VISION/AUDIO configs
 │   ├── builder.py       # add_modality() / add_modality_in_place() -- modality engine
 │   ├── versions/
-│   │   └── apertus_2.py # Apertus 2 recipe (in-place pool renames)
+│   │   └── apertus_2.py # text-only Apertus 2 base/instruct recipe
 │   ├── instruct.py      # create_instruct_tokenizer() -- chat template + SFT sequences
 │   ├── io.py            # low-level file I/O (rename, alias, detect, save)
 │   └── cli.py           # CLI wrapper (python -m omnitok.cli)
@@ -152,6 +210,8 @@ apertus-omni-tokenizer/
 │   ├── test_apertus_recipe.py  # build reproduces the canonical 1.5 byte-for-byte
 │   ├── test_instruct.py        # chat template handling
 │   ├── tokenizer_factory.py    # shared synthetic-tokenizer factory
+│   ├── test_apertus_2_recipe.py # text base provenance and exact instruct rebuild
+│   ├── test_apertus_2_validation.py # deployment EOS/pad checks
 │   ├── test_builder.py         # add_modality tests
 │   ├── test_chat_template.py   # add chat template test
 │   ├── test_task_tokens.py     # task token contract tests
@@ -163,9 +223,8 @@ apertus-omni-tokenizer/
 │   ├── Apertus_1p5/          # Instructed tokenizer used for Apertus 1.5
 │   │   ├── tokenizer.json
 │   │   └── tokenizer_config.json
-│   └── Apertus_2/            # Base omni tokenizer for Apertus 2
-│       ├── tokenizer.json
-│       └── tokenizer_config.json
+│   ├── Apertus_2/            # Byte-identical upstream text base + provenance
+│   └── Apertus_2_instruct/   # Conversation controls, no multimodal extension
 ├── chat_templates/
 │   ├── Apertus_1/            # Chat template used for Apertus 1.0
 │   │   └── chat_template.jinja
@@ -175,7 +234,8 @@ apertus-omni-tokenizer/
     ├── gen_checksums.sh      # regenerate the manifests below
     ├── Apertus_1.md5         # canonical md5s for the 1.0 tokenizer
     ├── Apertus_1p5.md5       # canonical md5s for the 1.5 tokenizer
-    └── Apertus_2.md5         # canonical md5s for the Apertus 2 base
+    ├── Apertus_2.md5         # text base and provenance
+    └── Apertus_2_instruct.md5 # instruct tokenizer and library binding
 ```
 
 Adding a new modality = one new `ModalityConfig` entry in `modalities.py`.

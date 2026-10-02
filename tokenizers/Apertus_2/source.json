@@ -1,0 +1,10 @@
+{
+  "repository": "https://github.com/swiss-ai/apertus-tokenizer-development",
+  "revision": "28ad57a2757f6f72edb0def57ee725b6812f2df3",
+  "path": "preliminary_mul_200k",
+  "sha256": {
+    "tokenizer.json": "cd403d3f219e2433e3f78b32644b8e6a6134668e15138e6546360330635a96b9",
+    "tokenizer_config.json": "7e6b68d5a41fd06d399143b7591df15abf7ae2846fa8f444f66f3d5edee5996f",
+    "special_tokens_map.json": "816ec96e37c6d15e3cbc535dc146c898a7218f209fc154384f31fc1e6ad31ba5"
+  }
+}

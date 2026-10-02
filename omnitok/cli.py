@@ -38,7 +38,8 @@ def cmd_build_apertus_1p5(args: argparse.Namespace) -> None:
 def cmd_build_apertus_2(args: argparse.Namespace) -> None:
     from .versions import apertus_2
 
-    apertus_2.build(args.input_tokenizer, args.output_path)
+    build = apertus_2.build_base if args.variant == "base" else apertus_2.build_instruct
+    print(build(args.input_tokenizer, args.output_path))
 
 
 def cmd_add_instruct(args: argparse.Namespace) -> None:
@@ -111,11 +112,15 @@ def main() -> None:
     # ── build-apertus-2 ─────────────────────────────────────────────────
     p_v2 = sub.add_parser(
         "build-apertus-2",
-        help="Build the Apertus 2 omni tokenizer from the pinned text base.",
+        help="Build the text-only Apertus 2 base or instruct tokenizer.",
+    )
+    p_v2.add_argument(
+        "variant", choices=("base", "instruct"),
+        help="base: copy the pinned text base; instruct: add the conversation controls.",
     )
     p_v2.add_argument(
         "--input-tokenizer", required=True,
-        help="Path to the preliminary_mul_200k text base.",
+        help="Path to the pinned preliminary_mul_200k text base.",
     )
     p_v2.add_argument(
         "--output-path", required=True,
