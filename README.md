@@ -6,11 +6,22 @@ release) from the Apertus 1 base
 ([swiss-ai/Apertus-8B-2509](https://huggingface.co/swiss-ai/Apertus-8B-2509)),
 and documents the chat templates and canonical tokenizer files for both releases.
 
+## Where each tokenizer comes from
+
+`omnitok/registry.py` lists every directory under `tokenizers/` and records
+where it comes from. An *imported* tokenizer is an unchanged upstream file set,
+pinned to a revision and to the SHA-256 of every file. A *derived* tokenizer is
+built offline by a recipe from another registered tokenizer, its parent.
+`tests/test_registry.py` checks the pins and rebuilds every derived tokenizer
+byte-for-byte. It also fails on unregistered directories, so a new tokenizer
+needs only a registry entry, plus a recipe `(parent_dir, output_dir)` if it is
+derived.
+
 ## Apertus 2: text-only base and instruct
 
 `tokenizers/Apertus_2/` is the byte-identical 200,064-token text base from
 [`preliminary_mul_200k`](https://github.com/swiss-ai/apertus-tokenizer-development/tree/28ad57a2757f6f72edb0def57ee725b6812f2df3/preliminary_mul_200k).
-`source.json` pins its revision and SHA-256 hashes. It retains the upstream NFC
+Its revision and SHA-256 hashes are pinned in `omnitok/registry.py`. It retains the upstream NFC
 normalizer and BOS/EOS postprocessor. No vision/audio codebook vocabulary or
 modality metadata is added. Existing upstream special tokens, including the
 image/audio placeholders, remain at their original IDs.
@@ -51,7 +62,7 @@ python -m omnitok.cli build-apertus-2 base \
 python -m omnitok.cli build-apertus-2 instruct \
   --input-tokenizer tokenizers/Apertus_2 --output-path /tmp/Apertus_2_instruct
 
-pytest tests/test_apertus_2_recipe.py tests/test_apertus_2_validation.py -v
+pytest tests/test_registry.py tests/test_apertus_2_recipe.py tests/test_apertus_2_validation.py -v
 bash validation/gen_checksums.sh
 ```
 
@@ -73,7 +84,7 @@ the history of `omnitok/versions/apertus_2.py`.
 python -m omnitok.cli build-apertus-1p5 --output-path ./Apertus_1p5
 
 # Offline, from the checked-in copy of the base
-python -m omnitok.cli build-apertus-1p5 --output-path ./Apertus_1p5 --base-tokenizer tokenizers/Apertus_1
+python -m omnitok.cli build-apertus-1p5 --output-path ./Apertus_1p5 --base-tokenizer tokenizers/Apertus_1_base
 ```
 
 Or as a library:
@@ -85,7 +96,7 @@ build_apertus_1p5("./Apertus_1p5")
 ```
 
 The output is byte-identical to the canonical artifact (the manifest under
-`validation/` pins the md5 of every file, and `tests/test_apertus_recipe.py`
+`validation/` pins the md5 of every file, and `tests/test_registry.py`
 rebuilds and checks this). The full recipe — reasoning-delimiter renames, tool
 output tokens, normalizer alias/cleanup rules, vision + audio modalities, chat
 template, SFT sequences — is encoded in `omnitok/apertus.py`; that module's
@@ -196,6 +207,7 @@ apertus-omni-tokenizer/
 ├── validate_model.sh        # verify a served model dir matches canonical md5s
 ├── omnitok/
 │   ├── __init__.py      # public API exports
+│   ├── registry.py      # every tokenizer: origin or parent, pins, recipe
 │   ├── apertus.py       # build_apertus_1p5() -- the Apertus 1 -> 1.5 recipe
 │   ├── modalities.py    # ModalityConfig dataclass, built-in VISION/AUDIO configs
 │   ├── builder.py       # add_modality() / add_modality_in_place() -- modality engine
@@ -207,23 +219,25 @@ apertus-omni-tokenizer/
 ├── tests/
 │   ├── conftest.py             # shared fixtures
 │   ├── test_alias.py           # token alias tests (<image> == <|image|>)
-│   ├── test_apertus_recipe.py  # build reproduces the canonical 1.5 byte-for-byte
+│   ├── test_registry.py        # pins, byte-exact rebuilds, no unregistered dirs
+│   ├── test_apertus_recipe.py  # the 1.5 recipe rejects the wrong base
 │   ├── test_instruct.py        # chat template handling
 │   ├── tokenizer_factory.py    # shared synthetic-tokenizer factory
-│   ├── test_apertus_2_recipe.py # text base provenance and exact instruct rebuild
+│   ├── test_apertus_2_recipe.py # text base, instruct controls, build guards
 │   ├── test_apertus_2_validation.py # deployment EOS/pad checks
 │   ├── test_builder.py         # add_modality tests
 │   ├── test_chat_template.py   # add chat template test
 │   ├── test_task_tokens.py     # task token contract tests
 │   └── test_tokenizers.py      # checked-in tokenizers load + special-token IDs
 ├── tokenizers/
+│   ├── Apertus_1_base/       # Apertus 1 base model tokenizer (parent of 1.5)
 │   ├── Apertus_1/            # Instructed tokenizer used for Apertus 1.0
 │   │   ├── tokenizer.json
 │   │   └── tokenizer_config.json
 │   ├── Apertus_1p5/          # Instructed tokenizer used for Apertus 1.5
 │   │   ├── tokenizer.json
 │   │   └── tokenizer_config.json
-│   ├── Apertus_2/            # Byte-identical upstream text base + provenance
+│   ├── Apertus_2/            # Byte-identical upstream text base
 │   └── Apertus_2_instruct/   # Conversation controls, no multimodal extension
 ├── chat_templates/
 │   ├── Apertus_1/            # Chat template used for Apertus 1.0
@@ -234,7 +248,7 @@ apertus-omni-tokenizer/
     ├── gen_checksums.sh      # regenerate the manifests below
     ├── Apertus_1.md5         # canonical md5s for the 1.0 tokenizer
     ├── Apertus_1p5.md5       # canonical md5s for the 1.5 tokenizer
-    ├── Apertus_2.md5         # text base and provenance
+    ├── Apertus_2.md5         # canonical md5s for the text base
     └── Apertus_2_instruct.md5 # instruct tokenizer and library binding
 ```
 

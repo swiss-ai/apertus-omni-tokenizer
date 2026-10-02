@@ -1,6 +1,7 @@
 """Pinned text-only Apertus 2 base and conversation-token builds.
 
-The base is copied byte-for-byte from preliminary_mul_200k. The instruct
+The base is copied byte-for-byte from preliminary_mul_200k; its origin and
+file hashes are registered as Apertus_2 in omnitok/registry.py. The instruct
 variant renames seven reserved tokens without adding vocabulary or Jinja.
 Run ``python -m omnitok.cli build-apertus-2 --help`` for the CLI.
 """
@@ -12,14 +13,11 @@ import json
 from pathlib import Path
 from typing import Any
 
-SOURCE_REPOSITORY = "https://github.com/swiss-ai/apertus-tokenizer-development"
-SOURCE_REVISION = "28ad57a2757f6f72edb0def57ee725b6812f2df3"
-SOURCE_PATH = "preliminary_mul_200k"
-SOURCE_SHA256 = {
-    "tokenizer.json": "cd403d3f219e2433e3f78b32644b8e6a6134668e15138e6546360330635a96b9",
-    "tokenizer_config.json": "7e6b68d5a41fd06d399143b7591df15abf7ae2846fa8f444f66f3d5edee5996f",
-    "special_tokens_map.json": "816ec96e37c6d15e3cbc535dc146c898a7218f209fc154384f31fc1e6ad31ba5",
-}
+from .. import registry
+
+_SOURCE = registry.get("Apertus_2")
+SOURCE_REVISION = _SOURCE.origin.revision
+SOURCE_SHA256 = _SOURCE.sha256
 PROFILE_REVISION = "85874b84605f2a0452d53fe5874cc5eddac1b7f4"
 VOCAB_SIZE = 200_064
 CONTROLS = {
@@ -57,20 +55,11 @@ def _write_json(path: Path, value: Any) -> None:
 
 
 def build_base(input_path: str | Path, output_path: str | Path) -> Path:
-    """Copy the verified upstream base unchanged and record its provenance."""
+    """Copy the verified upstream base unchanged."""
     output, files = _read_source(input_path, output_path)
     output.mkdir(parents=True, exist_ok=True)
     for name, raw in files.items():
         (output / name).write_bytes(raw)
-    _write_json(
-        output / "source.json",
-        {
-            "repository": SOURCE_REPOSITORY,
-            "revision": SOURCE_REVISION,
-            "path": SOURCE_PATH,
-            "sha256": SOURCE_SHA256,
-        },
-    )
     return output
 
 

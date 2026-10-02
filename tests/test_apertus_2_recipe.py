@@ -22,9 +22,7 @@ BASE = ROOT / "tokenizers" / "Apertus_2"
 INSTRUCT = ROOT / "tokenizers" / "Apertus_2_instruct"
 
 
-def test_base_is_upstream_byte_exact_and_text_only():
-    for name, digest in SOURCE_SHA256.items():
-        assert hashlib.sha256((BASE / name).read_bytes()).hexdigest() == digest
+def test_base_is_text_only():
     backend = Tokenizer.from_file(str(BASE / "tokenizer.json"))
     assert backend.get_vocab_size() == VOCAB_SIZE
     assert backend.token_to_id("<SPECIAL_27>") == 27
@@ -36,14 +34,11 @@ def test_base_is_upstream_byte_exact_and_text_only():
     )
 
 
-@pytest.mark.parametrize(
-    "build,expected", [(build_base, BASE), (build_instruct, INSTRUCT)]
-)
-def test_rebuild_matches_every_committed_file(build, expected, tmp_path):
-    output = build(BASE, tmp_path / "built")
-    assert {p.name for p in output.iterdir()} == {p.name for p in expected.iterdir()}
-    for artifact in expected.iterdir():
-        assert (output / artifact.name).read_bytes() == artifact.read_bytes()
+def test_build_base_copies_the_pinned_files(tmp_path):
+    output = build_base(BASE, tmp_path / "built")
+    assert {p.name for p in output.iterdir()} == set(SOURCE_SHA256)
+    for name in SOURCE_SHA256:
+        assert (output / name).read_bytes() == (BASE / name).read_bytes()
 
 
 def test_instruct_only_renames_seven_slots_and_disables_text_rewriting():

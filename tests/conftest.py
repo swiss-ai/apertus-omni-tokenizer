@@ -2,11 +2,12 @@
 
 import pytest
 
-from omnitok import add_modality
+from omnitok import add_modality, registry
 
-BASE_TOKENIZER = "swiss-ai/Apertus-8B-2509"
 # Hub repos are mutable; pin the fixture base so runs are reproducible.
-BASE_REVISION = "3162c99675aa588097cecd4a24b9aa1f712af477"
+_BASE = registry.get("Apertus_1_base").origin
+BASE_TOKENIZER = _BASE.repo
+BASE_REVISION = _BASE.revision
 SMALL_VOCAB = 32
 
 

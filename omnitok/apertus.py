@@ -62,6 +62,7 @@ from typing import Any
 
 from transformers import AutoTokenizer
 
+from . import registry
 from .builder import add_modality
 from .instruct import create_instruct_tokenizer
 from .io import (
@@ -74,15 +75,16 @@ from .io import (
     prepend_normalizer_rules,
 )
 
-BASE_REPO = "swiss-ai/Apertus-8B-2509"
-# Hub repos are mutable (the sibling instruct repo had <SPECIAL_73> renamed
-# to <|image|> and reverted after release), so the base is pinned.
-BASE_REVISION = "3162c99675aa588097cecd4a24b9aa1f712af477"
+# The base is registered as Apertus_1_base (omnitok/registry.py), whose
+# checked-in copy is the offline build source. Hub repos are mutable (the
+# sibling instruct repo had <SPECIAL_73> renamed to <|image|> and reverted
+# after release), so the base is pinned.
+_BASE_ORIGIN = registry.get("Apertus_1_base").origin
+BASE_REPO = _BASE_ORIGIN.repo
+BASE_REVISION = _BASE_ORIGIN.revision
 # The build is parent-agnostic between the two Apertus 1 repos: the instruct
-# tokenizer (swiss-ai/Apertus-8B-Instruct-2509 @
-# b946d40447b2b597999b9c86d44bee0b452c919f) reproduces the same bytes,
-# verified 2026-07-29. Its checked-in mirror (tokenizers/Apertus_1) is the
-# offline build source and the validate_model.sh baseline.
+# tokenizer (registered as Apertus_1) reproduces the same bytes, verified
+# 2026-07-29.
 
 BASE_VOCAB_SIZE = 131072
 VISION_VOCAB_SIZE = 131072
@@ -423,3 +425,8 @@ def build_apertus_1p5(
 
     print(f"\nApertus 1.5 tokenizer written to {output_path}")
     return output_path
+
+
+def build_from_parent(parent: str | os.PathLike, output: str | os.PathLike) -> None:
+    """Registry recipe for Apertus_1p5: build from a local Apertus 1 base."""
+    build_apertus_1p5(os.fspath(output), base_tokenizer_path=os.fspath(parent))
