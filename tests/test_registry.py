@@ -7,6 +7,7 @@ tokenizer is covered without touching this file.
 import hashlib
 
 import pytest
+from tokenizers import Tokenizer
 
 from omnitok import registry
 from omnitok.registry import Derived, Imported
@@ -42,6 +43,15 @@ def test_imported_files_match_their_pins(entry):
     assert set(files) == set(entry.sha256)
     for name, path in files.items():
         assert hashlib.sha256(path.read_bytes()).hexdigest() == entry.sha256[name], name
+
+
+@pytest.mark.parametrize("entry", DERIVED, ids=lambda e: e.name)
+def test_derived_tokenizer_json_survives_a_resave(entry, tmp_path):
+    """Checkpoints often re-save their tokenizer; a tokenizers load-and-save
+    must reproduce the committed bytes, or validation and bindings break."""
+    path = registry.artifact_dir(entry.name) / "tokenizer.json"
+    Tokenizer.from_file(str(path)).save(str(tmp_path / "resaved.json"), pretty=True)
+    assert (tmp_path / "resaved.json").read_bytes() == path.read_bytes()
 
 
 @pytest.mark.parametrize("entry", DERIVED, ids=lambda e: e.name)

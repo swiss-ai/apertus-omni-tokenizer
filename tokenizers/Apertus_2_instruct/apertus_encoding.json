@@ -2,7 +2,7 @@
   "schema_version": 1,
   "profile": "apertus_2",
   "profile_revision": "85874b84605f2a0452d53fe5874cc5eddac1b7f4",
-  "tokenizer_sha256": "9fb2a11333b6de1eb887374b0421eccb31c25bab41cfe87ab3ebd8df028d7c8f",
+  "tokenizer_sha256": "e9c9eca5a9061996ea578064c932473b33b5f235eba3eeb30a80b068dd5b40ed",
   "controls": {
     "<|in|>": 40,
     "<|/in|>": 41,

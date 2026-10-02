@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import registry
+from ..io import _save_backend_state
 
 _SOURCE = registry.get("Apertus_2")
 SOURCE_REVISION = _SOURCE.origin.revision
@@ -98,7 +99,9 @@ def build_instruct(input_path: str | Path, output_path: str | Path) -> Path:
     for name, glyph in (("eos_token", "<|wait|>"), ("pad_token", "<|pad|>")):
         roles[name]["content"] = glyph
     output.mkdir(parents=True, exist_ok=True)
-    _write_json(output / "tokenizer.json", data)
+    # Through the backend, so a tokenizers load-and-save of the artifact
+    # reproduces its bytes (ids 40-46 return to their place in the vocab).
+    _save_backend_state(data, str(output / "tokenizer.json"))
     _write_json(output / "tokenizer_config.json", config)
     _write_json(output / "special_tokens_map.json", roles)
     _write_json(

@@ -91,6 +91,16 @@ def _rewrite_backend_state(
     path = os.path.join(save_path, "tokenizer.json")
     state = json.loads(Tokenizer.from_file(path).to_str())
     mutate(state)
+    _save_backend_state(state, path)
+
+
+def _save_backend_state(state: dict[str, Any], path: str) -> None:
+    """Write a tokenizer.json state through the backend.
+
+    The backend parses ``state`` first, so a malformed state raises instead of
+    being written, and the file comes out exactly as a tokenizers save would
+    write it; loading and saving it again reproduces the bytes.
+    """
     Tokenizer.from_str(json.dumps(state)).save(path, pretty=True)
 
 
