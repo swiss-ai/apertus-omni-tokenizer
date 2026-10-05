@@ -6,8 +6,8 @@
 # live in this repo. validate_model.sh consumes these manifests.
 #
 # Run from the repo root: bash validation/gen_checksums.sh
-# CI regenerates and `git diff --exit-code`s the result, so the manifests can
-# never silently drift from the checked-in tokenizers.
+# CI regenerates them and fails if `git status` shows any change or new file,
+# so the manifests can never silently drift from the checked-in tokenizers.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

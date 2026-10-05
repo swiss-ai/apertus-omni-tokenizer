@@ -4,6 +4,10 @@ on:
   pull_request:
   push:
     branches: [main]
+  # Weekly, so a new transformers or tokenizers release is tested without a PR.
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
 
 jobs:
   pre-commit:
@@ -17,16 +21,39 @@ jobs:
       - uses: pre-commit/action@v3.0.1
 
   tests:
-    name: Full test suite (incl. byte-identical 1.5 rebuild)
-    runs-on: ubuntu-latest
+    # The suite includes the byte-for-byte rebuilds, so every row also checks
+    # that its versions produce the committed artifacts.
+    name: Tests (${{ matrix.name }})
+    # Pinned: Python 3.9 has no build for Ubuntu 26.04, which ubuntu-latest
+    # becomes in November 2026.
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: lower bounds
+            python: "3.9"
+            pins: transformers==4.56.0 tokenizers==0.22.2
+          - name: newest transformers 4.x
+            python: "3.11"
+            pins: '"transformers<5"'
+          - name: transformers 5.x with tokenizers 0.22
+            python: "3.10"
+            pins: '"transformers<5.16"'
+          - name: newest releases
+            python: "3.14"
+            pins: ""
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python }}
 
-      - run: pip install -e ".[dev]"
+      - run: pip install -e ".[dev]" ${{ matrix.pins }}
+
+      - name: Show the resolved versions
+        run: python -c "import sys, transformers, tokenizers; print(sys.version.split()[0], transformers.__version__, tokenizers.__version__)"
 
       - name: Run all tests
         run: pytest tests/ -v
@@ -41,4 +68,7 @@ jobs:
         run: bash validation/gen_checksums.sh
 
       - name: Fail if manifests drifted from checked-in tokenizers
-        run: git diff --exit-code validation/
+        # status, not diff: a newly generated, untracked manifest also fails.
+        run: |
+          git status --porcelain validation/
+          test -z "$(git status --porcelain validation/)"

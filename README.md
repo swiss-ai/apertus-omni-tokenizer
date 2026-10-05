@@ -10,12 +10,40 @@ tokenizer comes from
 
 ## Contents
 
+- [Supported versions](#supported-versions)
 - [Repository structure](#repository-structure)
 - [Validating a deployed model](#validating-a-deployed-model)
 - [Recipes and the registry](#recipes-and-the-registry)
 - [Apertus 1.5](#apertus-15)
 - [Apertus 2](#apertus-2)
 - [Authors](#authors)
+
+## Supported versions
+
+| Use                                         | transformers               | tokenizers       | Why                                                                                                                        |
+|---------------------------------------------|----------------------------|------------------|----------------------------------------------------------------------------------------------------------------------------|
+| Load the committed tokenizers               | tested ≥ 4.48.2            | tested ≥ 0.21.0  | all load and encode correctly; below tokenizers 0.22.2 Apertus 1.5 takes 1–3 min to load instead of ~3 s                   |
+| Build and save with this package            | ≥ 4.56, ≠ 4.57.2, ≠ 4.57.3 | ≥ 0.22.2         | declared in `pyproject.toml`; 4.56 is the first transformers that accepts tokenizers 0.22.2                                |
+| `Apertus_2_instruct` through apertus-common | ≥ 5.16                     | ≥ 0.23.2, < 0.24 | declared in its `apertus_encoding.json`, checked by apertus-common on load; 5.16 is the first transformers that accepts it |
+
+transformers 4.57.2 fails on directories that hold a model `config.json`, such
+as Hub snapshots. 4.57.3 queries the Hub on every load by repo id, even with
+`HF_HUB_OFFLINE=1`, and fails without network access.
+
+No upper bound is declared. On every pull request and weekly, CI runs the whole
+suite, including the byte-for-byte rebuilds, on four combinations: the lower
+bounds (Python 3.9, transformers 4.56.0, tokenizers 0.22.2), the newest
+transformers 4.x, transformers 5.x with tokenizers 0.22, and the newest
+releases. A release that changes the built bytes fails CI instead of shipping
+different artifacts.
+
+Save only through the recipes. A plain `save_pretrained` on transformers 5.x
+writes `tokenizer_class: TokenizersBackend`, which transformers 4.x cannot load,
+and adds a post-processor to `Apertus_2_instruct`, which apertus-common rejects;
+on 4.x it inflates the Apertus 1.5 config to 25 MB, which fails validation.
+Deploy artifacts by copying their files, and repair a re-saved deployment with
+`validate_model.sh --fix` rather than by hand: restoring only `tokenizer_class`
+loads on 4.x but loses the role tokens such as `tokenizer.eoa_token`.
 
 ## Repository structure
 
