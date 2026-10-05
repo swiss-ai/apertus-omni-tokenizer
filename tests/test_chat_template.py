@@ -1,11 +1,9 @@
 """Format and rendering checks for chat template Jinja files.
 
-Checks run on every .jinja file under chat_templates/:
-
-  1. Syntax    - jinja2.Environment().parse() catches broken template syntax.
-  2. Rendering - apply_chat_template() renders conversations with the correct
-                 structure: right role delimiters, content preserved, ordering
-                 respected, system prompt present.
+Checks run on every .jinja file under chat_templates/: apply_chat_template()
+renders conversations with the correct structure (role delimiters, content in
+the right block, turns in order, a system block). Rendering compiles the
+template, so broken syntax and unknown filters fail here too.
 
 Run locally:
     pytest tests/test_chat_template.py -v
@@ -17,7 +15,6 @@ import os
 
 import jinja2
 import pytest
-from _pytest.outcomes import Failed
 from transformers import PreTrainedTokenizerFast
 
 from tokenizer_factory import make_word_level_tokenizer
@@ -50,39 +47,9 @@ def _render(path: str, messages: list[dict]) -> str:
     return tok.apply_chat_template(messages, tokenize=False)
 
 
-def test_chat_templates_directory_exists():
-    assert os.path.isdir(_TEMPLATES_DIR), (
-        f"chat_templates/ directory not found at {_TEMPLATES_DIR}"
-    )
-
-
 def test_at_least_one_jinja_file_present():
+    """Guards the discovery: with no files, every check below would skip."""
     assert _jinja_files(), f"No .jinja files found under {_TEMPLATES_DIR}"
-
-
-@pytest.mark.parametrize("path", _jinja_files(), ids=_rel)
-def test_jinja_syntax_is_valid(path):
-    """jinja2 must compile the file without error.
-
-    compile() is stricter than parse(): besides grammar it resolves filters and
-    raises TemplateAssertionError (a TemplateSyntaxError subclass) on an unknown
-    one, e.g. a typo'd ``|jion``. Function calls (strftime_now, raise_exception)
-    are not compile-checked, so the real templates still pass.
-    """
-    source = open(path, encoding="utf-8").read()
-    try:
-        jinja2.Environment().compile(source)
-    except jinja2.TemplateSyntaxError as exc:
-        pytest.fail(f"{_rel(path)}: syntax error on line {exc.lineno}: {exc.message}")
-
-
-@pytest.mark.parametrize("path", _jinja_files(), ids=_rel)
-def test_template_renders_without_error(path):
-    """apply_chat_template must not raise on a basic conversation."""
-    _render(path, [
-        {"role": "user", "content": "Hello"},
-        {"role": "assistant", "content": "Hi!"},
-    ])
 
 
 @pytest.mark.parametrize("path", _jinja_files(), ids=_rel)
@@ -99,28 +66,6 @@ def test_template_contains_role_delimiters(path):
 
 
 @pytest.mark.parametrize("path", _jinja_files(), ids=_rel)
-def test_template_preserves_user_content(path):
-    """User message content must appear in the rendered output."""
-    marker = "UNIQUE_USER_CONTENT_ABC"
-    rendered = _render(path, [
-        {"role": "user", "content": marker},
-        {"role": "assistant", "content": "response"},
-    ])
-    assert marker in rendered, "User content missing from rendered template"
-
-
-@pytest.mark.parametrize("path", _jinja_files(), ids=_rel)
-def test_template_preserves_assistant_content(path):
-    """Assistant message content must appear in the rendered output."""
-    marker = "UNIQUE_ASSISTANT_CONTENT_XYZ"
-    rendered = _render(path, [
-        {"role": "user", "content": "question"},
-        {"role": "assistant", "content": marker},
-    ])
-    assert marker in rendered, "Assistant content missing from rendered template"
-
-
-@pytest.mark.parametrize("path", _jinja_files(), ids=_rel)
 def test_template_user_content_inside_user_delimiters(path):
     """User content must sit between <|user_start|> and <|user_end|>."""
     marker = "INSIDE_USER_BLOCK"
@@ -133,16 +78,6 @@ def test_template_user_content_inside_user_delimiters(path):
     assert marker in rendered[start:end], (
         "User content is not between <|user_start|> and <|user_end|>"
     )
-
-
-@pytest.mark.parametrize("path", _jinja_files(), ids=_rel)
-def test_template_message_order_preserved(path):
-    """User turn must appear before assistant turn in the rendered output."""
-    rendered = _render(path, [
-        {"role": "user", "content": "SENTINEL_USER"},
-        {"role": "assistant", "content": "SENTINEL_ASSISTANT"},
-    ])
-    assert rendered.index("SENTINEL_USER") < rendered.index("SENTINEL_ASSISTANT")
 
 
 @pytest.mark.parametrize("path", _jinja_files(), ids=_rel)
@@ -166,16 +101,17 @@ def test_template_explicit_system_message_honored(path):
 
 
 @pytest.mark.parametrize("path", _jinja_files(), ids=_rel)
-def test_template_multi_turn_all_turns_present(path):
-    """All turns in a multi-turn conversation must appear in the rendered output."""
+def test_template_multi_turn_all_turns_present_in_order(path):
+    """Every turn of a multi-turn conversation is rendered, in order."""
+    markers = ["TURN_1_USER", "TURN_1_ASSISTANT", "TURN_2_USER", "TURN_2_ASSISTANT"]
+    roles = ["user", "assistant", "user", "assistant"]
     rendered = _render(path, [
-        {"role": "user", "content": "TURN_1_USER"},
-        {"role": "assistant", "content": "TURN_1_ASSISTANT"},
-        {"role": "user", "content": "TURN_2_USER"},
-        {"role": "assistant", "content": "TURN_2_ASSISTANT"},
+        {"role": role, "content": marker} for role, marker in zip(roles, markers)
     ])
-    for marker in ["TURN_1_USER", "TURN_1_ASSISTANT", "TURN_2_USER", "TURN_2_ASSISTANT"]:
+    for marker in markers:
         assert marker in rendered, f"{marker} missing from multi-turn render"
+    positions = [rendered.index(marker) for marker in markers]
+    assert positions == sorted(positions), "turns rendered out of order"
 
 
 # ---------------------------------------------------------------------------
@@ -228,25 +164,14 @@ def _render_with_tools(messages: list[dict]) -> str:
     return tok.apply_chat_template(messages, tokenize=False, tools=_weather_tools())
 
 
-def test_tool_call_arguments_as_string_renders():
-    """HF path: arguments is a JSON string, passed through verbatim."""
-    rendered = _render_with_tools(_multi_turn_messages('{"city": "Zurich"}'))
-    assert '{"get_weather": {"city": "Zurich"}}' in rendered
-
-
-def test_tool_call_arguments_as_dict_renders():
-    """vLLM path: arguments is an already-parsed dict (issue #4 regression).
-
-    Before the fix this raised 'can only concatenate str (not "dict") to str'."""
-    rendered = _render_with_tools(_multi_turn_messages({"city": "Zurich"}))
-    assert '{"get_weather": {"city": "Zurich"}}' in rendered
-
-
-def test_tool_call_string_and_dict_args_render_identically():
-    """Both arg representations must produce the same prompt."""
+def test_tool_call_arguments_render_the_same_as_string_or_dict():
+    """HF passes arguments as a JSON string, vLLM as a parsed dict; both render
+    the call identically. Before the issue #4 fix the dict path raised
+    'can only concatenate str (not "dict") to str'."""
     as_string = _render_with_tools(_multi_turn_messages('{"city": "Zurich"}'))
     as_dict = _render_with_tools(_multi_turn_messages({"city": "Zurich"}))
-    assert as_string == as_dict
+    assert '{"get_weather": {"city": "Zurich"}}' in as_string
+    assert as_dict == as_string
 
 
 # ---------------------------------------------------------------------------
@@ -270,24 +195,21 @@ def test_meta_good_example_passes_the_checks():
     """Sanity check: the unbroken baseline example passes the real checks, so a
     failure below is attributable to the breakage and not to the baseline."""
     path = _example("good_chat_template.jinja")
-    test_jinja_syntax_is_valid(path)
     test_template_contains_role_delimiters(path)
-    test_template_preserves_user_content(path)
     test_template_user_content_inside_user_delimiters(path)
 
 
 def test_meta_broken_syntax_is_reported():
-    """broken_syntax.jinja (an unterminated tag) must trip the syntax check."""
-    # test_jinja_syntax_is_valid calls pytest.fail() on a syntax error.
-    with pytest.raises(Failed):
-        test_jinja_syntax_is_valid(_example("broken_syntax.jinja"))
+    """broken_syntax.jinja (an unterminated tag) fails as soon as it renders."""
+    with pytest.raises(jinja2.TemplateSyntaxError):
+        test_template_contains_role_delimiters(_example("broken_syntax.jinja"))
 
 
 def test_meta_unknown_filter_is_reported():
-    """bad_filter.jinja (a typo'd ``|jion``) must trip the syntax check via
-    compile(); plain parse() would let it through. Locks in the stricter check."""
-    with pytest.raises(Failed):
-        test_jinja_syntax_is_valid(_example("bad_filter.jinja"))
+    """bad_filter.jinja (a typo'd ``|jion``) fails as soon as it renders:
+    rendering compiles the template, which resolves filters."""
+    with pytest.raises(jinja2.TemplateAssertionError):
+        test_template_contains_role_delimiters(_example("bad_filter.jinja"))
 
 
 def test_meta_corrupted_delimiters_are_reported():
@@ -304,7 +226,9 @@ def test_meta_corrupted_delimiters_are_reported():
 
 
 def test_meta_dropped_user_content_is_reported():
-    """dropped_user_content.jinja (discards the user message) must fail content
-    preservation."""
+    """dropped_user_content.jinja (discards the user message) must fail the
+    user-block check."""
     with pytest.raises(AssertionError):
-        test_template_preserves_user_content(_example("dropped_user_content.jinja"))
+        test_template_user_content_inside_user_delimiters(
+            _example("dropped_user_content.jinja")
+        )

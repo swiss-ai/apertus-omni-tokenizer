@@ -1,12 +1,11 @@
 """Offline text-only artifacts, reproducible builds and conversation controls."""
 
-import hashlib
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+from omnitok import cli
 from omnitok.recipes.apertus_2 import (
     CONTROLS,
     SOURCE_SHA256,
@@ -92,13 +91,9 @@ def test_framework_loading_roles_and_manifest():
     assert (instruct.eos_token_id, instruct.pad_token_id) == (45, 46)
     assert instruct.encode("Hello", add_special_tokens=True) == [36971]
     assert instruct.chat_template is None
+    # The rest of the binding is the recipe's output, pinned by the rebuild in
+    # tests/test_registry.py; the special-id inventory is pinned here.
     manifest = json.loads((INSTRUCT / "apertus_encoding.json").read_text())
-    assert (
-        manifest["tokenizer_sha256"]
-        == hashlib.sha256((INSTRUCT / "tokenizer.json").read_bytes()).hexdigest()
-    )
-    assert manifest["source_sha256"] == SOURCE_SHA256["tokenizer.json"]
-    assert manifest["controls"] == CONTROLS
     assert manifest["special_token_ids"] == list(range(124))
 
 
@@ -129,23 +124,13 @@ def test_rejects_overwriting_and_nested_outputs(build, tmp_path):
     assert marker.read_text() == "existing"
 
 
-def test_cli_builds_instruct(tmp_path):
+def test_cli_builds_instruct(tmp_path, monkeypatch):
     output = tmp_path / "instruct"
-    subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "omnitok.cli",
-            "build-apertus-2",
-            "instruct",
-            "--input-tokenizer",
-            str(BASE),
-            "--output-path",
-            str(output),
-        ],
-        check=True,
-        cwd=ROOT,
-    )
+    monkeypatch.setattr(sys, "argv", [
+        "omnitok", "build-apertus-2", "instruct",
+        "--input-tokenizer", str(BASE), "--output-path", str(output),
+    ])
+    cli.main()
     assert (output / "tokenizer.json").read_bytes() == (
         INSTRUCT / "tokenizer.json"
     ).read_bytes()

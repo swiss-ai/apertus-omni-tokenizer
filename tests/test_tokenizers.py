@@ -112,17 +112,9 @@ RULE_PINNED_DIRS = [
 @pytest.mark.parametrize(
     "tok_dir", TOKENIZER_DIRS, ids=[p.name for p in TOKENIZER_DIRS]
 )
-def test_tokenizer_loads(tok_dir):
-    """Every checked-in tokenizer loads (catches truncated/corrupt files)."""
-    tok = _load(tok_dir)
-    assert tok.vocab_size > 0
-
-
-@pytest.mark.parametrize(
-    "tok_dir", TOKENIZER_DIRS, ids=[p.name for p in TOKENIZER_DIRS]
-)
 def test_text_roundtrip(tok_dir):
-    """Plain text survives an encode -> decode round trip."""
+    """Every checked-in tokenizer loads (catches truncated or corrupt files)
+    and plain text survives an encode -> decode round trip."""
     tok = _load(tok_dir)
     text = "Hello world, this is a tokenizer test."
     decoded = tok.decode(tok.encode(text, add_special_tokens=False))
@@ -155,17 +147,17 @@ def test_eos_token(tok_dir):
 
 @pytest.mark.parametrize("tok_dir", RULE_PINNED_DIRS, ids=lambda p: p.name)
 def test_normalizer_rules(tok_dir):
-    """The canonical's Replace rules, in order: the reasoning-format rewrites
-    (<|channel|>thought / <thought> / <think> -> delimiters, <answer> strips,
-    whitespace collapse) and the modality aliases. The rule set lives only in
-    the artifact; this pins it against silent drift."""
+    """The canonical's whole normalizer chain, in order, is Replace rules: the
+    reasoning-format rewrites (<|channel|>thought / <thought> / <think> ->
+    delimiters, <answer> strips, whitespace collapse) and the modality
+    aliases. This pins it against silent drift."""
     with open(tok_dir / "tokenizer.json") as f:
-        norm = json.load(f)["normalizer"]
+        chain = json.load(f)["normalizer"]["normalizers"]
+    assert [r["type"] for r in chain] == ["Replace"] * len(chain)
     rules = []
-    for r in norm["normalizers"]:
-        if r["type"] == "Replace":
-            kind = "Regex" if "Regex" in r["pattern"] else "String"
-            rules.append((kind, r["pattern"][kind], r["content"]))
+    for r in chain:
+        kind = "Regex" if "Regex" in r["pattern"] else "String"
+        rules.append((kind, r["pattern"][kind], r["content"]))
     assert rules == [tuple(r) for r in EXPECTED[tok_dir.name]["normalizer_rules"]]
 
 

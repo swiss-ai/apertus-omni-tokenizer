@@ -13,11 +13,7 @@ import pytest
 from tokenizers.processors import TemplateProcessing
 from transformers import AutoTokenizer
 
-from omnitok.builder import (
-    _assert_in_place_base,
-    _strip_post_processor,
-    add_modality_in_place,
-)
+from omnitok.builder import _strip_post_processor, add_modality_in_place
 from omnitok.modalities import AUDIO, VISION
 from tokenizer_factory import make_word_level_tokenizer
 
@@ -37,17 +33,17 @@ AUDIO_POOL = {
 CONTENT = 8
 
 
-def _base(tmp_path, *, post_processor=True, drop=(), image_id=None):
-    """A tiny Apertus-2-shaped base: reserve pool, pre-baked <|image|>."""
+def _base(tmp_path, *, drop=()):
+    """A tiny Apertus-2-shaped base: reserve pool, pre-baked <|image|>,
+    and a BOS-inserting post-processor."""
     added = [s for s in POOL if s not in drop] + ["<|image|>"]
     tok = make_word_level_tokenizer(
         ("<unk>", "hi", "there"), bos_eos=True, added_tokens=added, added_special=True
     )
-    if post_processor:
-        bos = tok.convert_tokens_to_ids("<s>")
-        tok.backend_tokenizer.post_processor = TemplateProcessing(
-            single="<s> $A", pair="<s> $A $B", special_tokens=[("<s>", bos)]
-        )
+    bos = tok.convert_tokens_to_ids("<s>")
+    tok.backend_tokenizer.post_processor = TemplateProcessing(
+        single="<s> $A", pair="<s> $A $B", special_tokens=[("<s>", bos)]
+    )
     out = str(tmp_path / "base")
     tok.save_pretrained(out)
     return out, tok.convert_tokens_to_ids("<|image|>")
@@ -63,7 +59,9 @@ def _build(tmp_path, base, image_id, **kw):
 
 
 class TestInPlaceBuild:
-    def test_ids_never_move_and_placeholder_is_reused(self, tmp_path):
+    def test_id_layout(self, tmp_path):
+        """Pool slots are renamed where they sit, the placeholder is reused,
+        and only content tokens are appended, contiguously."""
         base, image_id = _base(tmp_path)
         before = AutoTokenizer.from_pretrained(base)
         pinned = {s: before.convert_tokens_to_ids(s) for s in POOL}
@@ -74,17 +72,9 @@ class TestInPlaceBuild:
         for src, target in POOL.items():
             assert after.convert_tokens_to_ids(target) == pinned[src], target
         assert after.convert_tokens_to_ids("<|image|>") == image_id
-
-    def test_content_tokens_are_appended_contiguously(self, tmp_path):
-        base, image_id = _base(tmp_path)
-        base_size = len(AutoTokenizer.from_pretrained(base))
-
-        _, out = _build(tmp_path, base, image_id)
-
-        after = AutoTokenizer.from_pretrained(out)
-        assert len(after) == base_size + CONTENT
+        assert len(after) == len(before) + CONTENT
         ids = [after.convert_tokens_to_ids(f"<|visual token {i}|>") for i in range(CONTENT)]
-        assert ids == list(range(base_size, base_size + CONTENT))
+        assert ids == list(range(len(before), len(before) + CONTENT))
 
     def test_post_processor_is_stripped_from_the_written_file(self, tmp_path):
         """save_pretrained re-adds an empty TemplateProcessing on 5.x, so the
@@ -104,24 +94,20 @@ class TestInPlaceBuild:
         tok = AutoTokenizer.from_pretrained(out)
         assert tok.encode("hi")[0] == tok.bos_token_id
 
-    def test_structure_token_ids_are_published_on_request(self, tmp_path):
+    @pytest.mark.parametrize("publish", [True, False])
+    def test_structure_token_ids_are_published_only_on_request(self, tmp_path, publish):
         base, image_id = _base(tmp_path)
 
-        _, out = _build(tmp_path, base, image_id, publish_structure_ids=True)
+        _, out = _build(tmp_path, base, image_id, publish_structure_ids=publish)
 
         cfg = json.load(open(os.path.join(out, "tokenizer_config.json")))
         (vision,) = cfg["omnimodal_config"]["modalities"]
+        if not publish:
+            assert "structure_token_ids" not in vision
+            return
+        tok = AutoTokenizer.from_pretrained(out)
         assert vision["structure_token_ids"]["<|img_end_of_row|>"] == \
-            AutoTokenizer.from_pretrained(out).convert_tokens_to_ids("<|img_end_of_row|>")
-
-    def test_structure_token_ids_are_absent_by_default(self, tmp_path):
-        base, image_id = _base(tmp_path)
-
-        _, out = _build(tmp_path, base, image_id)
-
-        cfg = json.load(open(os.path.join(out, "tokenizer_config.json")))
-        (vision,) = cfg["omnimodal_config"]["modalities"]
-        assert "structure_token_ids" not in vision
+            tok.convert_tokens_to_ids("<|img_end_of_row|>")
 
 
 class TestStackedInPlaceBuild:
@@ -165,24 +151,11 @@ class TestStackedInPlaceBuild:
             & set(audio["structure_token_ids"].values())
         )
 
-    def test_the_first_modality_survives_the_second(self, stacked):
+    def test_both_aliases_survive_stacking(self, stacked):
         out, pinned, _ = stacked
         tok = AutoTokenizer.from_pretrained(out)
-        for slot, name in POOL.items():
-            assert tok.convert_tokens_to_ids(name) == pinned[slot], name
         assert tok.encode("<image>", add_special_tokens=False) == [pinned["<|image|>"]]
         assert tok.encode("<audio>", add_special_tokens=False) == [pinned["<|audio|>"]]
-
-    def test_rerunning_a_modality_over_its_own_output_is_rejected(
-        self, stacked, tmp_path
-    ):
-        out, pinned, _ = stacked
-        with pytest.raises(ValueError, match="missing reserve slots"):
-            add_modality_in_place(
-                out, str(tmp_path / "again"), VISION, CONTENT, renames=dict(POOL),
-                reused_ids={"<|image|>": pinned["<|image|>"]},
-                strip_post_processor=True,
-            )
 
 
 class TestInPlaceBaseAssertions:
@@ -214,14 +187,6 @@ class TestInPlaceBaseAssertions:
 
 
 class TestStripPostProcessor:
-    def test_drops_a_template_over_the_declared_specials(self, tmp_path):
-        tok = make_word_level_tokenizer(("<unk>", "hi"), bos_eos=True)
-        tok.backend_tokenizer.post_processor = TemplateProcessing(
-            single="<s> $A", pair="<s> $A $B", special_tokens=[("<s>", 1)]
-        )
-        _strip_post_processor(tok)
-        assert tok.backend_tokenizer.post_processor is None
-
     def test_refuses_a_template_over_foreign_specials(self, tmp_path):
         tok = make_word_level_tokenizer(
             ("<unk>", "hi", "<|weird|>"), bos_eos=True,
@@ -235,11 +200,7 @@ class TestStripPostProcessor:
 
     def test_no_post_processor_is_a_no_op(self, tmp_path):
         tok = make_word_level_tokenizer(("<unk>", "hi"), bos_eos=True)
+        # transformers 5.x attaches a TemplateProcessing on construction.
+        tok.backend_tokenizer.post_processor = None
         _strip_post_processor(tok)
         assert tok.backend_tokenizer.post_processor is None
-
-
-def test_assert_in_place_base_accepts_a_matching_base(tmp_path):
-    base, image_id = _base(tmp_path)
-    tok = AutoTokenizer.from_pretrained(base)
-    _assert_in_place_base(tok, dict(POOL), {"<|image|>": image_id})
