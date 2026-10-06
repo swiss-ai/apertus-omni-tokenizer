@@ -1,4 +1,7 @@
 {
-  "eos_token_id": 45,
-  "pad_token_id": 46
+  "eos_token_id": [
+    12,
+    2
+  ],
+  "pad_token_id": 3
 }

@@ -32,6 +32,7 @@ def cmd_build_apertus_1p5(args: argparse.Namespace) -> None:
         revision=args.revision,
         chat_template_file=args.chat_template,
         work_dir=args.work_dir,
+        save_mode=args.save_mode,
     )
 
 
@@ -91,6 +92,7 @@ def main() -> None:
     p_add.set_defaults(func=cmd_add_modality)
 
     # ── build-apertus-1p5 ───────────────────────────────────────────────────
+    from .io import SAVE_MODES
     from .recipes.apertus_1p5 import BASE_REPO, BASE_REVISION
 
     p_v15 = sub.add_parser(
@@ -108,6 +110,10 @@ def main() -> None:
                        help="Chat template file (default: the checked-in Apertus 1.5 template).")
     p_v15.add_argument("--work-dir", default=None,
                        help="Keep intermediate stage directories here instead of a tempdir.")
+    p_v15.add_argument("--save-mode", choices=SAVE_MODES, default="compatible",
+                       help="compatible: the canonical files, loadable by transformers 4.x "
+                            "and 5.x (default); current_version: the installed "
+                            "transformers' save_pretrained format.")
     p_v15.set_defaults(func=cmd_build_apertus_1p5)
 
     # ── build-apertus-2 ─────────────────────────────────────────────────

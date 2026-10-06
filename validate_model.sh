@@ -180,7 +180,7 @@ run_checks() {
     fi
   fi
 
-  # Apertus 2 has one logical EOS. A message-end request suspension is separate
+  # Apertus 2 stops on wait or </s>. A message-end request suspension is separate
   # from EOS; retain each checkpoint's other generation settings unchanged.
   if [ "$MODEL_NAME" = Apertus_2_instruct ]; then
     gc="$MODEL_PATH/generation_config.json"
@@ -199,18 +199,21 @@ try:
     if not isinstance(config, dict):
         raise ValueError("generation settings must be an object")
     eos = config.get("eos_token_id")
-    if isinstance(eos, list) and len(eos) == 1:
-        eos = eos[0]
     pad = config.get("pad_token_id")
-    valid = type(eos) is int and eos == 45 and type(pad) is int and pad == 46
+    valid = (
+        isinstance(eos, list) and len(eos) == 2
+        and all(type(token_id) is int for token_id in eos)
+        and set(eos) == {12, 2}
+        and type(pad) is int and pad == 3
+    )
 except (OSError, ValueError, TypeError):
     valid = False
 sys.exit(0 if valid else 1)
 PYTHON
     then
-      ok "generation_config.json (eos_token_id is 45; pad_token_id is 46)"
+      ok "generation_config.json (eos_token_id contains 12 and 2; pad_token_id is 3)"
     else
-      fail "generation_config.json (requires eos_token_id 45 or [45], and pad_token_id 46)"
+      fail "generation_config.json (requires eos_token_id [12, 2] in either order, and pad_token_id 3)"
       failures=$((failures + 1))
       if [ "$FIX" -eq 1 ]; then
         echo "  note: --fix preserves generation settings; edit EOS/pad fields manually"

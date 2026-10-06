@@ -3,7 +3,12 @@
 The base is copied byte-for-byte from preliminary_mul_200k in
 https://github.com/swiss-ai/apertus-tokenizer-development; its revision and
 file hashes are registered as Apertus_2 in omnitok/registry.py. The instruct
-variant renames seven reserved tokens without adding vocabulary or Jinja.
+variant replaces the legacy special-token layout with 13 consecutive assigned
+tokens and 111 reserved slots. Padding is renamed in place at id 3; assistant
+delimiters become out delimiters at their original ids 10/11. Ordinary
+vocabulary ids and BPE merges stay unchanged. BOS/EOS placement belongs to the conversation encoder; the tokenizer
+never inserts either automatically. There is no Jinja template; generation
+stops on wait or </s>.
 Run ``python -m omnitok.cli build-apertus-2 --help`` for the CLI.
 """
 
@@ -15,21 +20,33 @@ from pathlib import Path
 from typing import Any
 
 from .. import registry
-from ..io import _save_backend_state
+from ..io import save_tokenizer_files
 
 _SOURCE = registry.get("Apertus_2")
 SOURCE_REVISION = _SOURCE.origin.revision
 SOURCE_SHA256 = _SOURCE.sha256
-PROFILE_REVISION = "85874b84605f2a0452d53fe5874cc5eddac1b7f4"
 VOCAB_SIZE = 200_064
+SPECIAL_TOKEN_COUNT = 124
+# Assigned ids 0-12, followed by <SPECIAL_13> through <SPECIAL_123>.
+# Preserve the base's assistant_start/end ids when renaming them to out / /out.
+SPECIAL_TOKENS = (
+    "<unk>", "<s>", "</s>", "<|pad|>",
+    "<iban-pii>", "<email-pii>", "<ip-pii>",
+    "<|in|>", "<|/in|>", "<|hdr|>", "<|out|>", "<|/out|>", "<|wait|>",
+)
 CONTROLS = {
-    "<|in|>": 40,
-    "<|/in|>": 41,
-    "<|out|>": 42,
-    "<|/out|>": 43,
-    "<|hdr|>": 44,
-    "<|wait|>": 45,
-    "<|pad|>": 46,
+    glyph: SPECIAL_TOKENS.index(glyph)
+    for glyph in ("<|in|>", "<|/in|>", "<|out|>", "<|/out|>",
+                  "<|hdr|>", "<|wait|>", "<|pad|>")
+}
+
+EXTRA_SPECIAL_TOKENS = {
+    "input_start_token": "<|in|>",
+    "input_end_token": "<|/in|>",
+    "output_start_token": "<|out|>",
+    "output_end_token": "<|/out|>",
+    "header_end_token": "<|hdr|>",
+    "wait_token": "<|wait|>",
 }
 
 
@@ -65,65 +82,55 @@ def build_base(input_path: str | Path, output_path: str | Path) -> Path:
     return output
 
 
-def build_instruct(input_path: str | Path, output_path: str | Path) -> Path:
-    """Derive exact-text conversation encoding from the pinned text base."""
+def build_instruct(
+    input_path: str | Path, output_path: str | Path, *, save_mode: str = "compatible"
+) -> Path:
+    """Derive exact-text conversation encoding from the pinned text base.
+
+    Only the canonical compatible save mode is supported by this recipe;
+    it reproduces identical artifact bytes across the build matrix.
+    """
+    if save_mode != "compatible":
+        raise ValueError("Apertus_2_instruct is saved only in compatible mode")
     output, files = _read_source(input_path, output_path)
     data = json.loads(files["tokenizer.json"])
     vocab = data["model"]["vocab"]
     added = {entry["id"]: entry for entry in data["added_tokens"]}
     if len(vocab) != VOCAB_SIZE:
         raise ValueError("unexpected text vocabulary size")
-    for glyph, token_id in CONTROLS.items():
-        reserved = f"<SPECIAL_{token_id}>"
-        if (
-            vocab.get(reserved) != token_id
-            or added.get(token_id, {}).get("content") != reserved
-            or glyph in vocab
-        ):
-            raise ValueError(f"reserved slot {token_id} differs from the pinned base")
-        del vocab[reserved]
+    # Remove the whole old block before assigning names: compaction moves
+    # retained spellings between ids, which would otherwise collide.
+    if set(added) != set(range(SPECIAL_TOKEN_COUNT)):
+        raise ValueError("unexpected special-token layout")
+    for token_id, entry in added.items():
+        if vocab.get(entry["content"]) != token_id:
+            raise ValueError(f"special slot {token_id} differs from the pinned base")
+        del vocab[entry["content"]]
+    for token_id in range(SPECIAL_TOKEN_COUNT):
+        glyph = (SPECIAL_TOKENS[token_id] if token_id < len(SPECIAL_TOKENS)
+                 else f"<SPECIAL_{token_id}>")
         vocab[glyph] = token_id
         added[token_id].update(content=glyph, special=True, normalized=False)
-    # Literal glyphs and decomposed Unicode are data; controls are inserted by
-    # the consuming library with ordinary-text special recognition disabled.
+    # The conversation encoder owns BOS/EOS placement. Role metadata below
+    # declares the tokens, but neither postprocessing nor add_* may insert them.
+    # Ordinary text is encoded by the consumer with special recognition disabled.
     data.update(normalizer=None, post_processor=None, padding=None, truncation=None)
     config = json.loads(files["tokenizer_config.json"])
-    config.pop("added_tokens_decoder", None)
     config.update(
         eos_token="<|wait|>",
         pad_token="<|pad|>",
         add_bos_token=False,
         add_eos_token=False,
+        extra_special_tokens=EXTRA_SPECIAL_TOKENS,
+        **EXTRA_SPECIAL_TOKENS,
     )
-    roles = json.loads(files["special_tokens_map.json"])
-    for name, glyph in (("eos_token", "<|wait|>"), ("pad_token", "<|pad|>")):
-        roles[name]["content"] = glyph
-    output.mkdir(parents=True, exist_ok=True)
-    # Through the backend, so a tokenizers load-and-save of the artifact
-    # reproduces its bytes (ids 40-46 return to their place in the vocab).
-    _save_backend_state(data, str(output / "tokenizer.json"))
-    _write_json(output / "tokenizer_config.json", config)
-    _write_json(output / "special_tokens_map.json", roles)
+    # The writer drops the added-token mirror and derives the special-tokens
+    # map from the roles; through the backend, the special ids return to their place
+    # in the vocab, so a tokenizers load-and-save reproduces the bytes.
+    save_tokenizer_files(output, data, config)
     _write_json(
-        output / "generation_config.json", {"eos_token_id": 45, "pad_token_id": 46}
-    )
-    _write_json(
-        output / "apertus_encoding.json",
-        {
-            "schema_version": 1,
-            "profile": "apertus_2",
-            "profile_revision": PROFILE_REVISION,
-            "tokenizer_sha256": hashlib.sha256(
-                (output / "tokenizer.json").read_bytes()
-            ).hexdigest(),
-            "controls": CONTROLS,
-            "special_token_ids": sorted(
-                token["id"] for token in data["added_tokens"] if token["special"]
-            ),
-            "tokenizers_version": ">=0.23.2,<0.24",
-            "text_mode": "verbatim",
-            "source_revision": SOURCE_REVISION,
-            "source_sha256": SOURCE_SHA256["tokenizer.json"],
-        },
+        output / "generation_config.json",
+        {"eos_token_id": [CONTROLS["<|wait|>"], vocab["</s>"]],
+         "pad_token_id": CONTROLS["<|pad|>"]},
     )
     return output

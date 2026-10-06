@@ -32,7 +32,7 @@
     },
     {
       "id": 3,
-      "content": "<pad>",
+      "content": "<|pad|>",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -41,186 +41,6 @@
     },
     {
       "id": 4,
-      "content": "<|system_start|>",
-      "single_word": false,
-      "lstrip": false,
-      "rstrip": false,
-      "normalized": false,
-      "special": true
-    },
-    {
-      "id": 5,
-      "content": "<|system_end|>",
-      "single_word": false,
-      "lstrip": false,
-      "rstrip": false,
-      "normalized": false,
-      "special": true
-    },
-    {
-      "id": 6,
-      "content": "<|developer_start|>",
-      "single_word": false,
-      "lstrip": false,
-      "rstrip": false,
-      "normalized": false,
-      "special": true
-    },
-    {
-      "id": 7,
-      "content": "<|developer_end|>",
-      "single_word": false,
-      "lstrip": false,
-      "rstrip": false,
-      "normalized": false,
-      "special": true
-    },
-    {
-      "id": 8,
-      "content": "<|user_start|>",
-      "single_word": false,
-      "lstrip": false,
-      "rstrip": false,
-      "normalized": false,
-      "special": true
-    },
-    {
-      "id": 9,
-      "content": "<|user_end|>",
-      "single_word": false,
-      "lstrip": false,
-      "rstrip": false,
-      "normalized": false,
-      "special": true
-    },
-    {
-      "id": 10,
-      "content": "<|assistant_start|>",
-      "single_word": false,
-      "lstrip": false,
-      "rstrip": false,
-      "normalized": false,
-      "special": true
-    },
-    {
-      "id": 11,
-      "content": "<|assistant_end|>",
-      "single_word": false,
-      "lstrip": false,
-      "rstrip": false,
-      "normalized": false,
-      "special": true
-    },
-    {
-      "id": 12,
-      "content": "<|inner_prefix|>",
-      "single_word": false,
-      "lstrip": false,
-      "rstrip": false,
-      "normalized": false,
-      "special": true
-    },
-    {
-      "id": 13,
-      "content": "<|inner_suffix|>",
-      "single_word": false,
-      "lstrip": false,
-      "rstrip": false,
-      "normalized": false,
-      "special": true
-    },
-    {
-      "id": 14,
-      "content": "<|tools_prefix|>",
-      "single_word": false,
-      "lstrip": false,
-      "rstrip": false,
-      "normalized": false,
-      "special": true
-    },
-    {
-      "id": 15,
-      "content": "<|tools_suffix|>",
-      "single_word": false,
-      "lstrip": false,
-      "rstrip": false,
-      "normalized": false,
-      "special": true
-    },
-    {
-      "id": 16,
-      "content": "<|tool_output_start|>",
-      "single_word": false,
-      "lstrip": false,
-      "rstrip": false,
-      "normalized": false,
-      "special": true
-    },
-    {
-      "id": 17,
-      "content": "<|tool_output_end|>",
-      "single_word": false,
-      "lstrip": false,
-      "rstrip": false,
-      "normalized": false,
-      "special": true
-    },
-    {
-      "id": 18,
-      "content": "<|image|>",
-      "single_word": false,
-      "lstrip": false,
-      "rstrip": false,
-      "normalized": false,
-      "special": true
-    },
-    {
-      "id": 19,
-      "content": "<|audio|>",
-      "single_word": false,
-      "lstrip": false,
-      "rstrip": false,
-      "normalized": false,
-      "special": true
-    },
-    {
-      "id": 20,
-      "content": "<reflection>",
-      "single_word": false,
-      "lstrip": false,
-      "rstrip": false,
-      "normalized": false,
-      "special": true
-    },
-    {
-      "id": 21,
-      "content": "</reflection>",
-      "single_word": false,
-      "lstrip": false,
-      "rstrip": false,
-      "normalized": false,
-      "special": true
-    },
-    {
-      "id": 22,
-      "content": "<think>",
-      "single_word": false,
-      "lstrip": false,
-      "rstrip": false,
-      "normalized": false,
-      "special": true
-    },
-    {
-      "id": 23,
-      "content": "</think>",
-      "single_word": false,
-      "lstrip": false,
-      "rstrip": false,
-      "normalized": false,
-      "special": true
-    },
-    {
-      "id": 24,
       "content": "<iban-pii>",
       "single_word": false,
       "lstrip": false,
@@ -229,7 +49,7 @@
       "special": true
     },
     {
-      "id": 25,
+      "id": 5,
       "content": "<email-pii>",
       "single_word": false,
       "lstrip": false,
@@ -238,8 +58,188 @@
       "special": true
     },
     {
-      "id": 26,
+      "id": 6,
       "content": "<ip-pii>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 7,
+      "content": "<|in|>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 8,
+      "content": "<|/in|>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 9,
+      "content": "<|hdr|>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 10,
+      "content": "<|out|>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 11,
+      "content": "<|/out|>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 12,
+      "content": "<|wait|>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 13,
+      "content": "<SPECIAL_13>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 14,
+      "content": "<SPECIAL_14>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 15,
+      "content": "<SPECIAL_15>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 16,
+      "content": "<SPECIAL_16>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 17,
+      "content": "<SPECIAL_17>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 18,
+      "content": "<SPECIAL_18>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 19,
+      "content": "<SPECIAL_19>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 20,
+      "content": "<SPECIAL_20>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 21,
+      "content": "<SPECIAL_21>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 22,
+      "content": "<SPECIAL_22>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 23,
+      "content": "<SPECIAL_23>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 24,
+      "content": "<SPECIAL_24>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 25,
+      "content": "<SPECIAL_25>",
+      "single_word": false,
+      "lstrip": false,
+      "rstrip": false,
+      "normalized": false,
+      "special": true
+    },
+    {
+      "id": 26,
+      "content": "<SPECIAL_26>",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -365,7 +365,7 @@
     },
     {
       "id": 40,
-      "content": "<|in|>",
+      "content": "<SPECIAL_40>",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -374,7 +374,7 @@
     },
     {
       "id": 41,
-      "content": "<|/in|>",
+      "content": "<SPECIAL_41>",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -383,7 +383,7 @@
     },
     {
       "id": 42,
-      "content": "<|out|>",
+      "content": "<SPECIAL_42>",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -392,7 +392,7 @@
     },
     {
       "id": 43,
-      "content": "<|/out|>",
+      "content": "<SPECIAL_43>",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -401,7 +401,7 @@
     },
     {
       "id": 44,
-      "content": "<|hdr|>",
+      "content": "<SPECIAL_44>",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -410,7 +410,7 @@
     },
     {
       "id": 45,
-      "content": "<|wait|>",
+      "content": "<SPECIAL_45>",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -419,7 +419,7 @@
     },
     {
       "id": 46,
-      "content": "<|pad|>",
+      "content": "<SPECIAL_46>",
       "single_word": false,
       "lstrip": false,
       "rstrip": false,
@@ -1160,30 +1160,30 @@
       "<unk>": 0,
       "<s>": 1,
       "</s>": 2,
-      "<pad>": 3,
-      "<|system_start|>": 4,
-      "<|system_end|>": 5,
-      "<|developer_start|>": 6,
-      "<|developer_end|>": 7,
-      "<|user_start|>": 8,
-      "<|user_end|>": 9,
-      "<|assistant_start|>": 10,
-      "<|assistant_end|>": 11,
-      "<|inner_prefix|>": 12,
-      "<|inner_suffix|>": 13,
-      "<|tools_prefix|>": 14,
-      "<|tools_suffix|>": 15,
-      "<|tool_output_start|>": 16,
-      "<|tool_output_end|>": 17,
-      "<|image|>": 18,
-      "<|audio|>": 19,
-      "<reflection>": 20,
-      "</reflection>": 21,
-      "<think>": 22,
-      "</think>": 23,
-      "<iban-pii>": 24,
-      "<email-pii>": 25,
-      "<ip-pii>": 26,
+      "<|pad|>": 3,
+      "<iban-pii>": 4,
+      "<email-pii>": 5,
+      "<ip-pii>": 6,
+      "<|in|>": 7,
+      "<|/in|>": 8,
+      "<|hdr|>": 9,
+      "<|out|>": 10,
+      "<|/out|>": 11,
+      "<|wait|>": 12,
+      "<SPECIAL_13>": 13,
+      "<SPECIAL_14>": 14,
+      "<SPECIAL_15>": 15,
+      "<SPECIAL_16>": 16,
+      "<SPECIAL_17>": 17,
+      "<SPECIAL_18>": 18,
+      "<SPECIAL_19>": 19,
+      "<SPECIAL_20>": 20,
+      "<SPECIAL_21>": 21,
+      "<SPECIAL_22>": 22,
+      "<SPECIAL_23>": 23,
+      "<SPECIAL_24>": 24,
+      "<SPECIAL_25>": 25,
+      "<SPECIAL_26>": 26,
       "<SPECIAL_27>": 27,
       "<SPECIAL_28>": 28,
       "<SPECIAL_29>": 29,
@@ -1197,13 +1197,13 @@
       "<SPECIAL_37>": 37,
       "<SPECIAL_38>": 38,
       "<SPECIAL_39>": 39,
-      "<|in|>": 40,
-      "<|/in|>": 41,
-      "<|out|>": 42,
-      "<|/out|>": 43,
-      "<|hdr|>": 44,
-      "<|wait|>": 45,
-      "<|pad|>": 46,
+      "<SPECIAL_40>": 40,
+      "<SPECIAL_41>": 41,
+      "<SPECIAL_42>": 42,
+      "<SPECIAL_43>": 43,
+      "<SPECIAL_44>": 44,
+      "<SPECIAL_45>": 45,
+      "<SPECIAL_46>": 46,
       "<SPECIAL_47>": 47,
       "<SPECIAL_48>": 48,
       "<SPECIAL_49>": 49,

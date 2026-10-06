@@ -59,5 +59,4 @@ gen_manifest Apertus_2 \
 gen_manifest Apertus_2_instruct \
   tokenizer.json           tokenizers/Apertus_2_instruct/tokenizer.json \
   tokenizer_config.json    tokenizers/Apertus_2_instruct/tokenizer_config.json \
-  special_tokens_map.json  tokenizers/Apertus_2_instruct/special_tokens_map.json \
-  apertus_encoding.json    tokenizers/Apertus_2_instruct/apertus_encoding.json
+  special_tokens_map.json  tokenizers/Apertus_2_instruct/special_tokens_map.json

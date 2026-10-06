@@ -33,11 +33,11 @@ def validate(target, fix=False, model="Apertus_2_instruct"):
     )
 
 
-@pytest.mark.parametrize("eos", [45, [45]])
+@pytest.mark.parametrize("eos", [[12, 2], [2, 12]])
 def test_generation_settings_preserved_with_extra_fields(deployed, eos):
     config = {
         "eos_token_id": eos,
-        "pad_token_id": 46,
+        "pad_token_id": 3,
         "temperature": 0.7,
         "transformers_version": "checkpoint-specific",
     }
@@ -68,17 +68,25 @@ def test_apertus_1p5_retains_existing_eos_checks(tmp_path, eos, expected):
 # written verbatim.
 INVALID_GENERATION_CONFIGS = {
     "missing": None,
-    "malformed_json": '{"eos_token_id":45,"pad_token_id":46, broken}',
-    "no_pad": {"eos_token_id": 45},
-    "no_eos": {"pad_token_id": 46},
-    "wrong_eos": {"eos_token_id": 43, "pad_token_id": 46},
-    "wrong_pad": {"eos_token_id": 45, "pad_token_id": 3},
-    "eos_list_of_two": {"eos_token_id": [45, 45], "pad_token_id": 46},
-    "float_eos": {"eos_token_id": 45.0, "pad_token_id": 46},
-    "float_eos_in_list": {"eos_token_id": [45.0], "pad_token_id": 46},
-    "float_pad": {"eos_token_id": 45, "pad_token_id": 46.0},
-    "nested_pad": {"eos_token_id": 45, "nested": {"pad_token_id": 46}},
-    "non_finite": {"eos_token_id": 45, "pad_token_id": 46, "temperature": float("nan")},
+    "malformed_json": '{"eos_token_id":[12,2],"pad_token_id":3, broken}',
+    "no_pad": {"eos_token_id": [12, 2]},
+    "no_eos": {"pad_token_id": 3},
+    "wrong_eos": {"eos_token_id": [10, 2], "pad_token_id": 3},
+    "old_layout": {"eos_token_id": 45, "pad_token_id": 46},
+    "wrong_pad": {"eos_token_id": [12, 2], "pad_token_id": 46},
+    "wait_only_scalar": {"eos_token_id": 12, "pad_token_id": 3},
+    "wait_only_list": {"eos_token_id": [12], "pad_token_id": 3},
+    "end_only": {"eos_token_id": [2], "pad_token_id": 3},
+    "duplicate_eos": {"eos_token_id": [12, 12], "pad_token_id": 3},
+    "extra_eos": {"eos_token_id": [12, 2, 10], "pad_token_id": 3},
+    "float_eos": {"eos_token_id": 12.0, "pad_token_id": 3},
+    "float_eos_in_list": {"eos_token_id": [12.0, 2], "pad_token_id": 3},
+    "bool_eos_in_list": {"eos_token_id": [12, True], "pad_token_id": 3},
+    "nested_eos": {"eos_token_id": [[12], 2], "pad_token_id": 3},
+    "float_pad": {"eos_token_id": [12, 2], "pad_token_id": 3.0},
+    "bool_pad": {"eos_token_id": [12, 2], "pad_token_id": True},
+    "nested_pad": {"eos_token_id": [12, 2], "nested": {"pad_token_id": 3}},
+    "non_finite": {"eos_token_id": [12, 2], "pad_token_id": 3, "temperature": float("nan")},
 }
 
 
@@ -94,6 +102,6 @@ def test_invalid_eos_or_padding_rejected_without_replacement(deployed, config):
     before = generation.read_bytes() if generation.exists() else None
     result = validate(deployed, fix=True)
     assert result.returncode == 1, result.stdout + result.stderr
-    assert "requires eos_token_id 45 or [45]" in result.stdout
+    assert "requires eos_token_id [12, 2]" in result.stdout
     assert (generation.read_bytes() if generation.exists() else None) == before
     assert not list(deployed.glob("generation_config.json.bak*"))

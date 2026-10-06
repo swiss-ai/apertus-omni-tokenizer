@@ -8,6 +8,7 @@ import pytest
 from omnitok import cli
 from omnitok.recipes.apertus_2 import (
     CONTROLS,
+    EXTRA_SPECIAL_TOKENS,
     SOURCE_SHA256,
     VOCAB_SIZE,
     build_base,
@@ -40,19 +41,68 @@ def test_build_base_copies_the_pinned_files(tmp_path):
         assert (output / name).read_bytes() == (BASE / name).read_bytes()
 
 
-def test_instruct_only_renames_seven_slots_and_disables_text_rewriting():
+def test_instruct_compacts_specials_without_changing_ordinary_vocabulary():
     before = json.loads((BASE / "tokenizer.json").read_bytes())
     after = json.loads((INSTRUCT / "tokenizer.json").read_bytes())
-    expected = json.loads(json.dumps(before))
-    by_id = {entry["id"]: entry for entry in expected["added_tokens"]}
-    for glyph, token_id in CONTROLS.items():
-        assert expected["model"]["vocab"].pop(f"<SPECIAL_{token_id}>") == token_id
-        expected["model"]["vocab"][glyph] = token_id
-        by_id[token_id].update(content=glyph, special=True, normalized=False)
-    expected.update(normalizer=None, post_processor=None, padding=None, truncation=None)
-    assert after == expected
-    assert len(after["model"]["vocab"]) == VOCAB_SIZE
-    assert after["model"]["merges"] == before["model"]["merges"]
+    assigned = [
+        "<unk>", "<s>", "</s>", "<|pad|>",
+        "<iban-pii>", "<email-pii>", "<ip-pii>",
+        "<|in|>", "<|/in|>", "<|hdr|>", "<|out|>", "<|/out|>", "<|wait|>",
+    ]
+    specials = assigned + [f"<SPECIAL_{i}>" for i in range(13, 124)]
+    vocab = after["model"]["vocab"]
+    assert vocab["<|out|>"] == before["model"]["vocab"]["<|assistant_start|>"] == 10
+    assert vocab["<|/out|>"] == before["model"]["vocab"]["<|assistant_end|>"] == 11
+    assert len(vocab) == VOCAB_SIZE
+    assert set(vocab.values()) == set(range(VOCAB_SIZE))
+    assert {s: i for s, i in vocab.items() if i < 124} == {
+        s: i for i, s in enumerate(specials)
+    }
+    assert after["added_tokens"] == [
+        {"id": i, "content": s, "special": True, "normalized": False,
+         "single_word": False, "lstrip": False, "rstrip": False}
+        for i, s in enumerate(specials)
+    ]
+    assert {s: i for s, i in vocab.items() if i >= 124} == {
+        s: i for s, i in before["model"]["vocab"].items() if i >= 124
+    }
+    for key in ("normalizer", "post_processor", "padding", "truncation"):
+        assert after[key] is None
+    # Everything outside the special block and disabled text transforms is inherited.
+    for state in (before, after):
+        state["model"].pop("vocab")
+        for key in ("added_tokens", "normalizer", "post_processor", "padding", "truncation"):
+            state.pop(key)
+    assert before == after
+
+
+def test_removed_legacy_spellings_are_ordinary_text():
+    tokenizer = Tokenizer.from_file(str(INSTRUCT / "tokenizer.json"))
+    legacy = ["<pad>", "<|image|>", "<|audio|>", "<think>", "</think>",
+              "<reflection>", "</reflection>"]
+    for role in ("system", "developer", "user", "assistant", "tool_output"):
+        legacy.extend([f"<|{role}_start|>", f"<|{role}_end|>"])
+    for role in ("inner", "tools"):
+        legacy.extend([f"<|{role}_prefix|>", f"<|{role}_suffix|>"])
+    for text in legacy:
+        assert tokenizer.token_to_id(text) is None
+        ids = tokenizer.encode(text).ids
+        assert not set(range(124)).intersection(ids)
+        assert tokenizer.decode(ids) == text
+
+
+def test_all_specials_encode_and_decode_consistently():
+    tokenizer = Tokenizer.from_file(str(INSTRUCT / "tokenizer.json"))
+    for token_id, token in tokenizer.get_added_tokens_decoder().items():
+        assert tokenizer.encode(token.content).ids == [token_id]
+        assert tokenizer.decode([token_id], skip_special_tokens=False) == token.content
+        assert tokenizer.decode([token_id], skip_special_tokens=True) == ""
+    tokenizer.encode_special_tokens = True
+    for token in tokenizer.get_added_tokens_decoder().values():
+        text = f"A {token.content} B"
+        ids = tokenizer.encode(text).ids
+        assert not set(range(124)).intersection(ids)
+        assert tokenizer.decode(ids) == text
 
 
 def test_instruct_controls_and_exact_ordinary_text():
@@ -73,28 +123,30 @@ def test_instruct_controls_and_exact_ordinary_text():
         assert not special_ids.intersection(ids)
         assert tokenizer.decode(ids, skip_special_tokens=False) == text
     ids = [
-        42,
+        10,
         *tokenizer.encode("reply").ids,
-        44,
+        9,
         *tokenizer.encode("Hello").ids,
-        43,
-        45,
+        11,
+        12,
     ]
-    assert ids == [42, 120213, 44, 36971, 43, 45]
+    assert ids == [10, 120213, 9, 36971, 11, 12]
 
 
-def test_framework_loading_roles_and_manifest():
+def test_framework_loading_roles():
     base = AutoTokenizer.from_pretrained(BASE, local_files_only=True)
     instruct = AutoTokenizer.from_pretrained(INSTRUCT, local_files_only=True)
     assert len(base) == len(instruct) == VOCAB_SIZE
     assert (base.bos_token_id, base.eos_token_id, base.pad_token_id) == (1, 2, 3)
-    assert (instruct.eos_token_id, instruct.pad_token_id) == (45, 46)
+    assert (instruct.eos_token_id, instruct.pad_token_id) == (12, 3)
     assert instruct.encode("Hello", add_special_tokens=True) == [36971]
     assert instruct.chat_template is None
-    # The rest of the binding is the recipe's output, pinned by the rebuild in
-    # tests/test_registry.py; the special-id inventory is pinned here.
-    manifest = json.loads((INSTRUCT / "apertus_encoding.json").read_text())
-    assert manifest["special_token_ids"] == list(range(124))
+    for role, glyph in EXTRA_SPECIAL_TOKENS.items():
+        assert getattr(instruct, role) == glyph
+        assert getattr(instruct, role + "_id") == CONTROLS[glyph]
+    assert {i for i, t in instruct.added_tokens_decoder.items() if t.special} == set(range(124))
+    generation = json.loads((INSTRUCT / "generation_config.json").read_text())
+    assert generation == {"eos_token_id": [12, 2], "pad_token_id": 3}
 
 
 @pytest.mark.parametrize("filename", list(SOURCE_SHA256))

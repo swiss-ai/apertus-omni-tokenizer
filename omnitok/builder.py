@@ -17,7 +17,7 @@ from transformers import AutoTokenizer
 
 from .io import (
     _resolve_tokenizer_path,
-    _rewrite_backend_state,
+    rewrite_backend_state,
     assert_droppable_post_processor,
     add_token_alias,
     build_omnimodal_config,
@@ -359,7 +359,7 @@ def _assemble(
             assert_droppable_post_processor(state.get("post_processor"), declared)
             state["post_processor"] = None
 
-        _rewrite_backend_state(output_path, _drop)
+        rewrite_backend_state(output_path, _drop)
 
     # Reload after all file mutations so the returned tokenizer matches disk.
     tokenizer = AutoTokenizer.from_pretrained(output_path, use_fast=True)

@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import tempfile
 from typing import Any, Callable, Sequence
 
 from huggingface_hub import snapshot_download
@@ -79,7 +80,7 @@ def _resolve_tokenizer_path(tokenizer_path: str, revision: str | None = None) ->
 # ── Token manipulation ───────────────────────────────────────────────────────
 
 
-def _rewrite_backend_state(
+def rewrite_backend_state(
     save_path: str, mutate: Callable[[dict[str, Any]], None]
 ) -> None:
     """Round-trip tokenizer.json through the backend, applying ``mutate``.
@@ -88,13 +89,18 @@ def _rewrite_backend_state(
     edit raises instead of writing a corrupt file, and the serialization
     stays identical to what the backend itself writes.
     """
-    path = os.path.join(save_path, "tokenizer.json")
-    state = json.loads(Tokenizer.from_file(path).to_str())
+    state = load_backend_state(save_path)
     mutate(state)
-    _save_backend_state(state, path)
+    save_backend_state(state, os.path.join(save_path, "tokenizer.json"))
 
 
-def _save_backend_state(state: dict[str, Any], path: str) -> None:
+def load_backend_state(save_path: str) -> dict[str, Any]:
+    """The tokenizer.json state of ``save_path``, as the backend serializes it."""
+    path = os.path.join(save_path, "tokenizer.json")
+    return json.loads(Tokenizer.from_file(path).to_str())
+
+
+def save_backend_state(state: dict[str, Any], path: str) -> None:
     """Write a tokenizer.json state through the backend.
 
     The backend parses ``state`` first, so a malformed state raises instead of
@@ -162,7 +168,7 @@ def rename_reserved_tokens(
             if entry["content"] in present:
                 entry["content"] = present[entry["content"]]
 
-    _rewrite_backend_state(save_path, _rename)
+    rewrite_backend_state(save_path, _rename)
 
     def _replace(obj):
         if isinstance(obj, dict):
@@ -221,7 +227,7 @@ def prepend_normalizer_rules(
     added token. Rules already present are not duplicated. Operates directly
     on ``tokenizer.json``.
     """
-    _rewrite_backend_state(save_path, lambda state: _prepend_rules(state, rules))
+    rewrite_backend_state(save_path, lambda state: _prepend_rules(state, rules))
     print(f"  Prepended {len(rules)} normalizer rules")
 
 
@@ -388,45 +394,76 @@ def dump_canonical_json(obj: dict[str, Any], path: str) -> None:
 _SPECIAL_TOKEN_ROLES = ("bos_token", "eos_token", "pad_token", "unk_token")
 
 
-def finalize_tokenizer_config(
-    save_path: str,
+SAVE_MODES = ("compatible", "current_version")
+
+# The files save_tokenizer_files owns: stale copies in the output are removed.
+TOKENIZER_FILES = (
+    "tokenizer.json", "tokenizer_config.json", "special_tokens_map.json",
+    "chat_template.jinja", "added_tokens.json",
+)
+
+# Never carried by a compatible config: the added-token mirror transformers 4.x
+# writes, and the keys of transformers 5.x saves.
+_DROPPED_CONFIG_KEYS = ("added_tokens_decoder", "backend", "is_local", "local_files_only")
+
+
+def save_tokenizer_files(
+    output: str | os.PathLike,
+    state: dict[str, Any],
+    config: dict[str, Any],
     *,
-    carried_keys: Sequence[str],
-    overrides: dict[str, Any],
-    require_chat_template: bool = False,
-) -> dict[str, Any]:
-    """Rewrite the saved config into its canonical, version-independent form.
+    mode: str = "compatible",
+    config_keys: Sequence[str] | None = None,
+    overrides: dict[str, Any] | None = None,
+) -> None:
+    """Write a tokenizer's files: the last step of every recipe.
 
-    ``save_pretrained`` emits whatever shape the running transformers prefers.
-    5.x writes a TokenizersBackend class plus fossils that 4.x cannot load;
-    4.x mirrors every added token into ``added_tokens_decoder``.
-    An allowlist (``carried_keys``) plus explicit overrides ties the output
-    to the recipe, not to the build environment.
+    ``state`` is the tokenizer.json content and ``config`` the
+    tokenizer_config.json content; a ``chat_template`` in it is written to
+    chat_template.jinja. The config keeps ``config_keys`` if given, else every
+    key but the added-token mirror and 5.x-only keys, then takes ``overrides``,
+    with ``tokenizer_class: PreTrainedTokenizerFast`` by default.
 
-    Writes chat_template.jinja only if the built config carries a template;
-    set ``require_chat_template`` where its absence means
-    the instruct stage silently did not run.
-    Rewrites special_tokens_map.json from whichever role tokens are present.
+    ``compatible`` (the default) writes the same bytes on every supported
+    transformers/tokenizers version, loadable by transformers 4.x and 5.x:
+    tokenizer.json through the tokenizers backend, the config as sorted JSON,
+    and a special-tokens map with only the role tokens.
 
-    Returns the config that was written.
+    ``current_version`` writes the same tokenizer with the installed
+    transformers' ``save_pretrained``: its native format, which other major
+    versions may not load (a 5.x save does not load on 4.x).
     """
-    config_path = os.path.join(save_path, "tokenizer_config.json")
-    with open(config_path, "r", encoding="utf-8") as f:
-        built = json.load(f)
-
-    chat_template = built.pop("chat_template", None)
-    if chat_template is None:
-        if require_chat_template:
-            raise ValueError("Pipeline did not produce a chat template.")
+    if mode not in SAVE_MODES:
+        raise ValueError(f"save mode must be one of {SAVE_MODES}, got {mode!r}")
+    config = dict(config)
+    chat_template = config.pop("chat_template", None)
+    if config_keys is None:
+        config = {k: v for k, v in config.items() if k not in _DROPPED_CONFIG_KEYS}
     else:
-        with open(os.path.join(save_path, "chat_template.jinja"), "w",
-                  encoding="utf-8") as f:
-            f.write(chat_template)
+        config = {key: config[key] for key in config_keys}
+    config.update({"tokenizer_class": "PreTrainedTokenizerFast", **(overrides or {})})
 
-    config = {key: built[key] for key in carried_keys}
-    config.update(overrides)
-    dump_canonical_json(config, config_path)
+    output = os.fspath(output)
+    os.makedirs(output, exist_ok=True)
+    for name in TOKENIZER_FILES:
+        if os.path.exists(os.path.join(output, name)):
+            os.remove(os.path.join(output, name))
+    if mode == "compatible":
+        _write_compatible(output, state, config, chat_template)
+        return
+    with tempfile.TemporaryDirectory() as compatible:
+        _write_compatible(compatible, state, config, chat_template)
+        AutoTokenizer.from_pretrained(compatible).save_pretrained(output)
 
+
+def _write_compatible(
+    output: str,
+    state: dict[str, Any],
+    config: dict[str, Any],
+    chat_template: str | None,
+) -> None:
+    save_backend_state(state, os.path.join(output, "tokenizer.json"))
+    dump_canonical_json(config, os.path.join(output, "tokenizer_config.json"))
     dump_canonical_json(
         {
             name: {
@@ -439,9 +476,12 @@ def finalize_tokenizer_config(
             for name in _SPECIAL_TOKEN_ROLES
             if name in config
         },
-        os.path.join(save_path, "special_tokens_map.json"),
+        os.path.join(output, "special_tokens_map.json"),
     )
-    return config
+    if chat_template is not None:
+        with open(os.path.join(output, "chat_template.jinja"), "w",
+                  encoding="utf-8") as f:
+            f.write(chat_template)
 
 
 def write_tokenizer_config(

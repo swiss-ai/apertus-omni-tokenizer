@@ -127,7 +127,7 @@ TOKENIZERS: tuple[Entry, ...] = (
         "Apertus_2_instruct",
         parent="Apertus_2",
         recipe="omnitok.recipes.apertus_2:build_instruct",
-        note="Seven conversation controls in reserved slots 40-46.",
+        note="Compact special-token layout: assigned ids 0-12, reserves 13-123.",
     ),
 )
 

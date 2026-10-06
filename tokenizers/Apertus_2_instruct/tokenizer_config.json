@@ -5,14 +5,27 @@
   "bos_token": "<s>",
   "clean_up_tokenization_spaces": false,
   "eos_token": "<|wait|>",
-  "extra_special_tokens": {},
+  "extra_special_tokens": {
+    "header_end_token": "<|hdr|>",
+    "input_end_token": "<|/in|>",
+    "input_start_token": "<|in|>",
+    "output_end_token": "<|/out|>",
+    "output_start_token": "<|out|>",
+    "wait_token": "<|wait|>"
+  },
+  "header_end_token": "<|hdr|>",
+  "input_end_token": "<|/in|>",
+  "input_start_token": "<|in|>",
   "model_input_names": [
     "input_ids",
     "attention_mask"
   ],
   "model_max_length": 1000000000000000019884624838656,
+  "output_end_token": "<|/out|>",
+  "output_start_token": "<|out|>",
   "pad_token": "<|pad|>",
   "padding_side": "left",
   "tokenizer_class": "PreTrainedTokenizerFast",
-  "unk_token": "<unk>"
+  "unk_token": "<unk>",
+  "wait_token": "<|wait|>"
 }
