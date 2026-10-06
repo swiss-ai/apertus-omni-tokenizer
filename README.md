@@ -21,6 +21,10 @@ Apertus 1 base).
 
 ## Supported versions
 
+This package needs Python ≥ 3.11. Loading the committed files needs only
+transformers and tokenizers, not this package; CI tests loading on Python 3.11
+to 3.14.
+
 | Use                                                                                       | transformers               | tokenizers       | Declared in                                                   |
 |-------------------------------------------------------------------------------------------|----------------------------|------------------|---------------------------------------------------------------|
 | Load the committed tokenizers                                                             | ≥ 4.48.2                   | ≥ 0.21.0         | CI (training stack 4.48.2 / 0.21.0)                           |
@@ -36,13 +40,14 @@ queries the Hub on every load by repo id, even with `HF_HUB_OFFLINE=1`, and
 fails without network access.
 
 **How CI checks version compatibility.** The full matrix runs on every pull
-request, push to `main`, and Monday at 04:17 UTC, resolving floating versions
+request, push to `main`, and Monday at 04:30 UTC, resolving floating versions
 afresh. The rows are defined in [.github/workflows/ci.yml](.github/workflows/ci.yml).
 
 - **Build/save (4 rows):** lower bounds, latest transformers 4.x, transformers
-  5.x with tokenizers 0.22, and latest releases. Every row runs the full suite,
-  including byte-identical rebuilds and compatible saves of **both
-  `Apertus_1p5` and `Apertus_2_instruct`**.
+  5.x with tokenizers 0.22, and latest releases, on Python 3.11 to 3.14 in
+  that order. Every row runs the full suite, including byte-identical
+  rebuilds and compatible saves of **both `Apertus_1p5` and
+  `Apertus_2_instruct`**.
 - **Load (6 rows):** every registered artifact is loaded in those four rows
   plus the training (4.48.2 / 0.21.0) and serving (4.51.1 / 0.21.1) stacks.
   Checks cover token ids, config values, BOS/EOS insertion and chat templates.
