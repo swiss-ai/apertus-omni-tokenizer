@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import registry
-from ..io import save_tokenizer_files
+from ..io import assert_droppable_post_processor, save_tokenizer_files
 
 _SOURCE = registry.get("Apertus_2")
 SOURCE_REVISION = _SOURCE.origin.revision
@@ -89,6 +89,12 @@ def build_instruct(
 
     Only the canonical compatible save mode is supported by this recipe;
     it reproduces identical artifact bytes across the build matrix.
+
+    Dropping the base's post-processor goes through
+    assert_droppable_post_processor first, as everywhere else in this
+    package: any code that drops a post-processor must check it is
+    droppable, so behaviour beyond declared BOS/EOS insertion is never
+    lost silently.
     """
     if save_mode != "compatible":
         raise ValueError("Apertus_2_instruct is saved only in compatible mode")
@@ -114,8 +120,11 @@ def build_instruct(
     # The conversation encoder owns BOS/EOS placement. Role metadata below
     # declares the tokens, but neither postprocessing nor add_* may insert them.
     # Ordinary text is encoded by the consumer with special recognition disabled.
-    data.update(normalizer=None, post_processor=None, padding=None, truncation=None)
     config = json.loads(files["tokenizer_config.json"])
+    assert_droppable_post_processor(
+        data["post_processor"], {config["bos_token"], config["eos_token"]}
+    )
+    data.update(normalizer=None, post_processor=None, padding=None, truncation=None)
     config.update(
         eos_token="<|wait|>",
         pad_token="<|pad|>",

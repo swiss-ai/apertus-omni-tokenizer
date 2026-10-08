@@ -7,6 +7,9 @@ __pycache__/
 .venv/
 *.egg-info/
 
+# No lockfile: CI resolves the newest releases with pip (see README)
+uv.lock
+
 # Local tool artifacts
 .claude/
 .codex
