@@ -5,10 +5,9 @@ from __future__ import annotations
 import json
 
 import pytest
-from tokenizers import Tokenizer
-from tokenizers.models import WordLevel
-from tokenizers.pre_tokenizers import Whitespace
 from transformers import AutoTokenizer, PreTrainedTokenizerFast
+
+from tokenizer_factory import make_word_level_tokenizer
 
 from omnitok.instruct import create_instruct_tokenizer
 
@@ -45,30 +44,16 @@ APERTUS_TEMPLATE = """{{ bos_token }}
 
 
 def _make_tokenizer(chat_template: str | None = None) -> PreTrainedTokenizerFast:
-    tokens = [
-        "<unk>",
-        "<s>",
-        "</s>",
-        "<|audio|>",
-        "<|audio_start|>",
-        "<|audio_end|>",
-        "<|image|>",
-        "<|user_start|>",
-        "<|assistant_start|>",
-        "<|assistant_end|>",
-    ]
-    vocab = {token: idx for idx, token in enumerate(tokens)}
-    tokenizer = Tokenizer(WordLevel(vocab, unk_token="<unk>"))
-    tokenizer.pre_tokenizer = Whitespace()
-    fast = PreTrainedTokenizerFast(
-        tokenizer_object=tokenizer,
-        bos_token="<s>",
-        eos_token="</s>",
-        unk_token="<unk>",
+    return make_word_level_tokenizer(
+        (
+            "<unk>", "<s>", "</s>", "<|audio|>", "<|audio_start|>",
+            "<|audio_end|>", "<|image|>", "<|user_start|>",
+            "<|assistant_start|>", "<|assistant_end|>",
+        ),
+        whitespace=True,
+        bos_eos=True,
+        chat_template=chat_template,
     )
-    if chat_template is not None:
-        fast.chat_template = chat_template
-    return fast
 
 
 def _save_tokenizer(path, chat_template: str | None = None) -> None:

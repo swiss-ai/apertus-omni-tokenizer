@@ -20,8 +20,8 @@
 #                is saved as <file>.bak first; existing backups are never
 #                overwritten — later runs write <file>.bak.1, .bak.2, ...),
 #                then re-run the validation.
-#                generation_config.json is checked field-level and has no
-#                canonical copy in the repo, so --fix cannot repair it.
+#                generation_config.json is checked field-level and never replaced,
+#                preserving checkpoint-specific generation settings.
 #
 # It downloads the checksum manifest for MODEL_NAME from this repo and compares
 # the md5 of each expected file in MODEL_PATH. Exits 0 if all match, 1 otherwise.
@@ -176,6 +176,47 @@ run_checks() {
         if [ "$FIX" -eq 1 ]; then
           echo "  note: --fix cannot repair generation_config.json (no canonical copy in the repo); edit eos_token_id manually"
         fi
+      fi
+    fi
+  fi
+
+  # Apertus 2 stops on wait or </s>. A message-end request suspension is separate
+  # from EOS; retain each checkpoint's other generation settings unchanged.
+  if [ "$MODEL_NAME" = Apertus_2_instruct ]; then
+    gc="$MODEL_PATH/generation_config.json"
+    if python3 - "$gc" <<'PYTHON'
+import json
+import sys
+
+
+def reject_nonfinite(value):
+    raise ValueError("non-finite JSON constant")
+
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as source:
+        config = json.load(source, parse_constant=reject_nonfinite)
+    if not isinstance(config, dict):
+        raise ValueError("generation settings must be an object")
+    eos = config.get("eos_token_id")
+    pad = config.get("pad_token_id")
+    valid = (
+        isinstance(eos, list) and len(eos) == 2
+        and all(type(token_id) is int for token_id in eos)
+        and set(eos) == {12, 2}
+        and type(pad) is int and pad == 3
+    )
+except (OSError, ValueError, TypeError):
+    valid = False
+sys.exit(0 if valid else 1)
+PYTHON
+    then
+      ok "generation_config.json (eos_token_id contains 12 and 2; pad_token_id is 3)"
+    else
+      fail "generation_config.json (requires eos_token_id [12, 2] in either order, and pad_token_id 3)"
+      failures=$((failures + 1))
+      if [ "$FIX" -eq 1 ]; then
+        echo "  note: --fix preserves generation settings; edit EOS/pad fields manually"
       fi
     fi
   fi

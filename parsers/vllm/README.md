@@ -94,9 +94,23 @@ Older builds shipped the delimiters as *special* tokens, which the default
 the whole deliberation block into `content`. If you hit that on a deployed model
 directory, flip the flag in place:
 
-```
-python examples/mark_reasoning_delimiters_nonspecial.py /path/to/served/model
+```python
+from omnitok.io import mark_tokens_non_special
+from omnitok.recipes.apertus_1p5 import REASONING_DELIMITER_TOKENS
+
+mark_tokens_non_special("/path/to/served/model", REASONING_DELIMITER_TOKENS)
 ```
 
 The tokenizer builder now applies this automatically (`mark_tokens_non_special`),
 so freshly built tokenizers need no fix-up.
+
+## Tests
+
+`tests/test_parsers.py` checks the plugin files statically on every run. Its
+three live tests load the plugins into vLLM, so they run only where vLLM is
+importable; CI does not install vLLM and skips them. Run them in an
+environment with vLLM:
+
+```bash
+pytest tests/test_parsers.py -v
+```

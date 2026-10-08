@@ -4,6 +4,9 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "30 4 * * 1"  # Mondays at 04:30 UTC
 
 jobs:
   pre-commit:
@@ -17,8 +20,57 @@ jobs:
       - uses: pre-commit/action@v3.0.1
 
   tests:
-    name: Full test suite (incl. byte-identical 1.5 rebuild)
+    # The suite includes the byte-for-byte rebuilds, so every row also checks
+    # that its versions produce the committed artifacts.
+    name: Tests (${{ matrix.name }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # One row per supported Python, from the requires-python floor up.
+        include:
+          - name: lower bounds
+            python: "3.11"
+            pins: transformers==4.56.0 tokenizers==0.22.2
+          - name: newest transformers 4.x
+            python: "3.12"
+            pins: '"transformers<5"'
+          - name: transformers 5.x with tokenizers 0.22
+            python: "3.13"
+            pins: '"transformers>=5,<5.16" "tokenizers>=0.22.2,<0.23"'
+          - name: newest releases
+            python: "3.14"
+            pins: ""
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - run: pip install --upgrade -e ".[dev]" ${{ matrix.pins }}
+
+      - name: Show the resolved versions
+        run: python -c "import sys, transformers, tokenizers; print(sys.version.split()[0], transformers.__version__, tokenizers.__version__)"
+
+      - name: Run all tests
+        run: pytest tests/ -v
+
+  load-consumer-stacks:
+    # The training and serving stacks are below the build floor, so these rows
+    # install them directly, add this package without its dependencies, and
+    # only load the committed tokenizers (no rebuilds). They run on the
+    # requires-python floor, 3.11, on purpose.
+    name: Load (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: training stack
+            pins: transformers==4.48.2 tokenizers==0.21.0
+          - name: serving stack
+            pins: transformers==4.51.1 tokenizers==0.21.1
     steps:
       - uses: actions/checkout@v4
 
@@ -26,10 +78,15 @@ jobs:
         with:
           python-version: "3.11"
 
-      - run: pip install -e ".[dev]"
+      - run: pip install ${{ matrix.pins }} huggingface_hub pytest jinja2
 
-      - name: Run all tests
-        run: pytest tests/ -v
+      - run: pip install --no-deps -e .
+
+      - name: Show the resolved versions
+        run: python -c "import sys, transformers, tokenizers; print(sys.version.split()[0], transformers.__version__, tokenizers.__version__)"
+
+      - name: Load the committed tokenizers
+        run: pytest tests/test_load.py tests/test_tokenizers.py -v
 
   checksum-manifests:
     name: Checksum manifests up to date
@@ -41,4 +98,7 @@ jobs:
         run: bash validation/gen_checksums.sh
 
       - name: Fail if manifests drifted from checked-in tokenizers
-        run: git diff --exit-code validation/
+        # status, not diff: a newly generated, untracked manifest also fails.
+        run: |
+          git status --porcelain validation/
+          test -z "$(git status --porcelain validation/)"
