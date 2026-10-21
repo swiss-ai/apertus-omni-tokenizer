@@ -8,6 +8,7 @@ and 4.51.1 / 0.21.1).
 
 import json
 import shutil
+import unicodedata
 
 import pytest
 from transformers import AutoTokenizer
@@ -74,9 +75,49 @@ def test_every_config_value_is_reachable(name, load):
 
 
 @pytest.mark.parametrize("name", NAMES)
+def test_added_token_metadata_and_decoding_without_config_mirror(name, tmp_path):
+    """tokenizer.json alone supplies added-token flags, including special-token
+    skipping; the duplicate config field is optional on every consumer stack.
+    """
+    for filename, source in registry.committed_files(name).items():
+        shutil.copy(source, tmp_path / filename)
+    config_path = tmp_path / "tokenizer_config.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config.pop("added_tokens_decoder", None)
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    added_tokens = json.loads((tmp_path / "tokenizer.json").read_bytes())["added_tokens"]
+    expected = {
+        entry["id"]: {key: value for key, value in entry.items() if key != "id"}
+        for entry in added_tokens
+    }
+    tok = AutoTokenizer.from_pretrained(tmp_path, local_files_only=True)
+    assert {i: token.__getstate__() for i, token in tok.added_tokens_decoder.items()} == expected
+    assert tok.decode([tok.pad_token_id], skip_special_tokens=False) == tok.pad_token
+    assert tok.decode([tok.pad_token_id], skip_special_tokens=True) == ""
+    special_ids = [entry["id"] for entry in added_tokens if entry["special"]]
+    ordinary_ids = tok.encode("Hello", add_special_tokens=False)
+    assert tok.decode(
+        special_ids + ordinary_ids,
+        skip_special_tokens=True,
+        clean_up_tokenization_spaces=False,
+    ) == "Hello"
+
+
+@pytest.mark.parametrize("name", NAMES)
 def test_special_tokens_inserted_on_encode(name, load):
     tok, _ = load(name)
     assert tok.encode("Hello") == SPECIALS_ON_ENCODE[name]
+
+
+@pytest.mark.parametrize("name", ["Apertus_2", "Apertus_2_instruct"])
+def test_apertus_2_normalizes_canonically_equivalent_text(name, load):
+    tok, _ = load(name)
+    for text in ("cafe\u0301", "Zu\u0308rich", "\u1100\u1161", "q\u0307\u0323"):
+        canonical = unicodedata.normalize("NFC", text)
+        ids = tok.encode(text, add_special_tokens=False)
+        assert ids == tok.encode(canonical, add_special_tokens=False)
+        assert tok.decode(ids, clean_up_tokenization_spaces=False) == canonical
 
 
 @pytest.mark.parametrize("name", TEMPLATED)
@@ -129,4 +170,6 @@ def test_apertus_2_named_controls_and_literal_content(load):
     payload = " ".join(specials.values()) + " e\u0301\r\n\x00🙂"
     ids = tok.encode(payload, add_special_tokens=False, split_special_tokens=True)
     assert set(specials).isdisjoint(ids)
-    assert tok.decode(ids, clean_up_tokenization_spaces=False) == payload
+    assert tok.decode(ids, clean_up_tokenization_spaces=False) == unicodedata.normalize(
+        "NFC", payload
+    )

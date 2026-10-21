@@ -265,15 +265,24 @@ From Python: `omnitok.build_apertus_1p5("./Apertus_1p5")`.
 
 `<image>`, `<audio>`, `<think>` and `</think>` encode to the same ids as
 `<|image|>`, `<|audio|>`, `<|inner_prefix|>` and `<|inner_suffix|>`.
+The normalizer rewrites each alias to its canonical spelling before token
+matching; aliases do not allocate additional vocabulary ids. Decoding those
+ids with `skip_special_tokens=False` returns the canonical spellings.
 
 ## Apertus 2
 
 | Tokenizer            | Contents                                                                                                                          |
 |----------------------|-----------------------------------------------------------------------------------------------------------------------------------|
 | `Apertus_2`          | 200,064-token text base, imported unchanged from [`preliminary_mul_200k`][pm200k]; keeps its NFC normalizer and automatic BOS/EOS |
-| `Apertus_2_instruct` | compact special-token layout: assigned ids 0–12, reserves 13–123; no normalizer or automatic BOS/EOS                              |
+| `Apertus_2_instruct` | compact special-token layout: assigned ids 0–12, reserves 13–123; keeps the base's NFC normalizer; no automatic BOS/EOS           |
 
 [pm200k]: https://github.com/swiss-ai/apertus-tokenizer-development/tree/28ad57a2757f6f72edb0def57ee725b6812f2df3/preliminary_mul_200k
+
+Both tokenizers apply Unicode NFC normalization before tokenization. For
+example, `e` followed by a combining acute accent (`U+0065 U+0301`) and
+precomposed `é` (`U+00E9`) encode identically. Decoding returns the NFC form,
+so it does not preserve the original Unicode representation of non-NFC text.
+NFC preserves case and accents and adds no image/audio or reasoning aliases.
 
 The instruct recipe removes the legacy role, reasoning, tool, reflection,
 and image/audio spellings, replaces the assistant delimiters with

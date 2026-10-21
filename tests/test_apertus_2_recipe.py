@@ -2,6 +2,7 @@
 
 import json
 import sys
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -66,12 +67,13 @@ def test_instruct_compacts_specials_without_changing_ordinary_vocabulary():
     assert {s: i for s, i in vocab.items() if i >= 124} == {
         s: i for s, i in before["model"]["vocab"].items() if i >= 124
     }
-    for key in ("normalizer", "post_processor", "padding", "truncation"):
+    assert after["normalizer"] == before["normalizer"] == {"type": "NFC"}
+    for key in ("post_processor", "padding", "truncation"):
         assert after[key] is None
-    # Everything outside the special block and disabled text transforms is inherited.
+    # Everything outside the special block and disabled processing is inherited.
     for state in (before, after):
         state["model"].pop("vocab")
-        for key in ("added_tokens", "normalizer", "post_processor", "padding", "truncation"):
+        for key in ("added_tokens", "post_processor", "padding", "truncation"):
             state.pop(key)
     assert before == after
 
@@ -105,7 +107,7 @@ def test_all_specials_encode_and_decode_consistently():
         assert tokenizer.decode(ids) == text
 
 
-def test_instruct_controls_and_exact_ordinary_text():
+def test_instruct_controls_and_nfc_ordinary_text():
     tokenizer = Tokenizer.from_file(str(INSTRUCT / "tokenizer.json"))
     for glyph, token_id in CONTROLS.items():
         assert tokenizer.encode(glyph).ids == [token_id]
@@ -121,7 +123,9 @@ def test_instruct_controls_and_exact_ordinary_text():
     ]:
         ids = tokenizer.encode(text).ids
         assert not special_ids.intersection(ids)
-        assert tokenizer.decode(ids, skip_special_tokens=False) == text
+        assert tokenizer.decode(ids, skip_special_tokens=False) == unicodedata.normalize(
+            "NFC", text
+        )
     ids = [
         10,
         *tokenizer.encode("reply").ids,

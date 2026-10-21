@@ -6,7 +6,8 @@ file hashes are registered as Apertus_2 in omnitok/registry.py. The instruct
 variant replaces the legacy special-token layout with 13 consecutive assigned
 tokens and 111 reserved slots. Padding is renamed in place at id 3; assistant
 delimiters become out delimiters at their original ids 10/11. Ordinary
-vocabulary ids and BPE merges stay unchanged. BOS/EOS placement belongs to the conversation encoder; the tokenizer
+vocabulary ids, BPE merges and the base's NFC normalizer stay unchanged.
+BOS/EOS placement belongs to the conversation encoder; the tokenizer
 never inserts either automatically. There is no Jinja template; generation
 stops on wait or </s>.
 Run ``python -m omnitok.cli build-apertus-2 --help`` for the CLI.
@@ -85,7 +86,7 @@ def build_base(input_path: str | Path, output_path: str | Path) -> Path:
 def build_instruct(
     input_path: str | Path, output_path: str | Path, *, save_mode: str = "compatible"
 ) -> Path:
-    """Derive exact-text conversation encoding from the pinned text base.
+    """Derive conversation encoding while preserving the text base's NFC normalizer.
 
     Only the canonical compatible save mode is supported by this recipe;
     it reproduces identical artifact bytes across the build matrix.
@@ -124,7 +125,7 @@ def build_instruct(
     assert_droppable_post_processor(
         data["post_processor"], {config["bos_token"], config["eos_token"]}
     )
-    data.update(normalizer=None, post_processor=None, padding=None, truncation=None)
+    data.update(post_processor=None, padding=None, truncation=None)
     config.update(
         eos_token="<|wait|>",
         pad_token="<|pad|>",
