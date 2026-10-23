@@ -116,9 +116,9 @@
                 {{- render_typescript_type(param_spec, tool.parameters.required or []) }}
                 {%- if param_spec.default is defined -%}
                     {%- if param_spec.enum %}
-                        {{- ", // default: " + param_spec.default }}
+                        {{- ", // default: " + (param_spec.default if param_spec.default is string else param_spec.default|tojson) }}
                     {%- elif param_spec.oneOf %}
-                        {{- "// default: " + param_spec.default }}
+                        {{- "// default: " + (param_spec.default if param_spec.default is string else param_spec.default|tojson) }}
                     {%- else %}
                         {{- ", // default: " + param_spec.default|tojson }}
                     {%- endif -%}
@@ -326,7 +326,7 @@
                 {%- if tool_call.function %}
                     {%- set tool_call = tool_call.function %}
                 {%- endif %}
-                {%- if tool_call.name and tool_call.arguments -%}
+                {%- if tool_call.name and tool_call.arguments is defined -%}
                     {{- '{"' + tool_call.name + '": ' + (tool_call.arguments if tool_call.arguments is string else tool_call.arguments | tojson) + '}' }}
                     {%- if not loop.last -%}
                         {{- ", " }}
@@ -354,12 +354,15 @@
         {{- raise_exception("Invalid message role") -}}
     {%- endif -%}
 {%- endfor -%}
+{%- set ends_with_tool_output = ns.in_tool -%}
 {%- if ns.in_tool -%}
     {{ tool_output_end_token }}
 {%- endif -%}
-{%- if ns.in_assistant and not (continue_assistant_message is defined and continue_assistant_message) and not ns.waiting_for_tool_outputs -%}
-    {{ end_assistant_token }}
-{%- endif -%}
-{%- if add_generation_prompt -%}
-    {{ assistant_token }}
+{%- if not (add_generation_prompt and ends_with_tool_output) -%}
+    {%- if ns.in_assistant and not (continue_assistant_message is defined and continue_assistant_message) and not ns.waiting_for_tool_outputs -%}
+        {{ end_assistant_token }}
+    {%- endif -%}
+    {%- if add_generation_prompt -%}
+        {{ assistant_token }}
+    {%- endif -%}
 {%- endif -%}
