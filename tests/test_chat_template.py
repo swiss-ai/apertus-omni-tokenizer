@@ -295,6 +295,25 @@ def test_prompt_after_tool_result_continues_the_turn():
     assert rendered.endswith("<|tool_output_start|>14C light rain<|tool_output_end|>")
 
 
+def test_tool_without_description_renders():
+    """A tool with no description (optional in the OpenAI schema) must render, not fail on str + None."""
+    tools = [{"type": "function", "function": {"name": "f", "parameters": {"type": "object", "properties": {}}}}]
+    rendered = _render_1p5([{"role": "user", "content": "hi"}], tools)
+    assert "type f = " in rendered
+
+
+def test_prompt_after_tool_outputs_block_continues_the_turn():
+    """The block-format assistant content (tool_outputs block) also ends the prompt at the tool output."""
+    msgs = [
+        {"role": "user", "content": "What is the weather in Zurich?"},
+        {"role": "assistant", "content": {"blocks": [
+            {"type": "tool_calls", "calls": [{"name": "get_weather", "arguments": {"city": "Zurich"}}]},
+            {"type": "tool_outputs", "outputs": [{"output": "14C, light rain"}]},
+        ]}},
+    ]
+    assert _render_1p5(msgs).endswith("<|tool_output_start|>14C, light rain<|tool_output_end|>")
+
+
 # ---------------------------------------------------------------------------
 # Meta-tests: guard the guards.
 #

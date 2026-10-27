@@ -100,7 +100,9 @@
         {%- if tool.function %}
             {%- set tool = tool.function %}
         {%- endif %}
-        {{- "// " + tool.description + "\n" }}
+        {%- if tool.description %}
+            {{- "// " + tool.description + "\n" }}
+        {%- endif %}
         {{- "type "+ tool.name + " = " }}
         {%- if tool.parameters and tool.parameters.properties %}
             {{- "(_: {\n" }}
@@ -158,7 +160,7 @@
 {%- set image_token = '<|image|>' -%}
 {%- set audio_token = '<|audio|>' -%}
 
-{%- set ns = namespace(in_assistant=false, in_tool=false, in_inner=false, waiting_for_tool_outputs=false, assistant_format=none) -%}
+{%- set ns = namespace(in_assistant=false, in_tool=false, in_inner=false, waiting_for_tool_outputs=false, assistant_format=none, last_block_tool_output=false) -%}
 
 {%- if messages and messages[0].role == 'system' -%}
     {%- if "content" in messages[0] -%}
@@ -192,6 +194,7 @@
 {{ end_developer_token }}
 
 {%- for message in loop_messages -%}
+    {%- set ns.last_block_tool_output = false -%}
     {%- if message.role == 'user' -%}
         {%- set ns.in_inner = false -%}
         {%- if ns.in_tool -%}
@@ -254,6 +257,7 @@
                 {%- set blocks = message.content.blocks -%}
                 {%- for block in blocks -%}
                     {%- if block.type == 'thoughts' -%}
+                        {%- set ns.last_block_tool_output = false -%}
                         {%- if ns.in_tool -%}
                             {{ tool_output_end_token }}
                             {%- set ns.in_tool = false -%}
@@ -264,6 +268,7 @@
                         {%- endif -%}
                         {{ block.text }}
                     {%- elif block.type == 'tool_calls' -%}
+                        {%- set ns.last_block_tool_output = false -%}
                         {%- if ns.in_tool -%}
                             {{ tool_output_end_token }}
                             {%- set ns.in_tool = false -%}
@@ -297,7 +302,9 @@
                         {%- endfor -%}
                         {{- tool_output_end_token }}
                         {%- set ns.waiting_for_tool_outputs = false -%}
+                        {%- set ns.last_block_tool_output = true -%}
                     {%- elif block.type == 'response' -%}
+                        {%- set ns.last_block_tool_output = false -%}
                         {%- if ns.in_tool -%}
                             {{ tool_output_end_token }}
                             {%- set ns.in_tool = false -%}
@@ -354,7 +361,7 @@
         {{- raise_exception("Invalid message role") -}}
     {%- endif -%}
 {%- endfor -%}
-{%- set ends_with_tool_output = ns.in_tool -%}
+{%- set ends_with_tool_output = ns.in_tool or ns.last_block_tool_output -%}
 {%- if ns.in_tool -%}
     {{ tool_output_end_token }}
 {%- endif -%}
