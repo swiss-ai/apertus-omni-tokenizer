@@ -7,6 +7,14 @@ __pycache__/
 .venv/
 *.egg-info/
 
+# No lockfile: CI resolves the newest releases with pip (see README)
+uv.lock
+
 # Local tool artifacts
 .claude/
 .codex
+.idea/
+
+# scratch files from review agents
+full_diff.txt
+full.diff

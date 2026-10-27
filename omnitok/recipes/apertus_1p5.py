@@ -22,10 +22,9 @@ between the two:
    chat_templates/Apertus_1p5/chat_template.jinja) plus SFT begin/end
    sequences.
 5. Finalize (`_finalize_apertus_1p5`): prepends the reasoning-trace cleanup
-   normalizer rules and writes tokenizer_config.json /
-   special_tokens_map.json / chat_template.jinja with a deterministic
-   serialization so the output does not depend on which transformers version
-   performed the build.
+   normalizer rules and writes the files with `save_tokenizer_files`, whose
+   compatible mode does not depend on which transformers version performed
+   the build.
 
 The canonical artifact deliberately repairs three defects of the originally
 released RC (apertus-ai/Apertus-v1.5-8B-RC); the recipe builds the repaired
@@ -62,26 +61,30 @@ from typing import Any
 
 from transformers import AutoTokenizer
 
-from .builder import add_modality
-from .instruct import create_instruct_tokenizer
-from .io import (
+from .. import registry
+from ..builder import add_modality
+from ..instruct import create_instruct_tokenizer
+from ..io import (
     _prepend_rules,
     _resolve_tokenizer_path,
-    _rewrite_backend_state,
     add_token_alias,
+    load_backend_state,
     mark_tokens_non_special,
     prepend_normalizer_rules,
+    rewrite_backend_state,
+    save_tokenizer_files,
 )
 
-BASE_REPO = "swiss-ai/Apertus-8B-2509"
-# Hub repos are mutable (the sibling instruct repo had <SPECIAL_73> renamed
-# to <|image|> and reverted after release), so the base is pinned.
-BASE_REVISION = "3162c99675aa588097cecd4a24b9aa1f712af477"
+# The base is registered as Apertus_1_base (omnitok/registry.py), whose
+# checked-in copy is the offline build source. Hub repos are mutable (the
+# sibling instruct repo had <SPECIAL_73> renamed to <|image|> and reverted
+# after release), so the base is pinned.
+_BASE_ORIGIN = registry.get("Apertus_1_base").origin
+BASE_REPO = _BASE_ORIGIN.repo
+BASE_REVISION = _BASE_ORIGIN.revision
 # The build is parent-agnostic between the two Apertus 1 repos: the instruct
-# tokenizer (swiss-ai/Apertus-8B-Instruct-2509 @
-# b946d40447b2b597999b9c86d44bee0b452c919f) reproduces the same bytes,
-# verified 2026-07-29. Its checked-in mirror (tokenizers/Apertus_1) is the
-# offline build source and the validate_model.sh baseline.
+# tokenizer (registered as Apertus_1) reproduces the same bytes
+# (tests/test_apertus_recipe.py).
 
 BASE_VOCAB_SIZE = 131072
 VISION_VOCAB_SIZE = 131072
@@ -142,8 +145,10 @@ REASONING_DELIMITER_TOKENS = (
 )
 
 
-# Multimodal role tokens surfaced to the Apertus1p5Processor, both as the
-# extra_special_tokens dict and as their top-level config mirrors.
+# Multimodal role tokens, written both as the extra_special_tokens dict and as
+# top-level config keys. transformers exposes each one as a tokenizer
+# attribute (e.g. tokenizer.eoa_token and tokenizer.eoa_token_id), which the
+# Apertus1p5Processor, vLLM and other consumers read.
 EXTRA_SPECIAL_TOKENS = {
     "audio_token": "<|audio|>",
     "boa_token": "<|audio_start|>",
@@ -176,16 +181,9 @@ _VERIFY_ENCODINGS = {
 
 
 def _default_chat_template_path() -> str:
-    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(
-        repo_root, "chat_templates", "Apertus_1p5", "chat_template.jinja"
+        registry.REPO_ROOT, "chat_templates", "Apertus_1p5", "chat_template.jinja"
     )
-
-
-def _dump_canonical_json(obj: dict[str, Any], path: str) -> None:
-    """transformers-style deterministic JSON: sorted keys, indent 2, LF tail."""
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(json.dumps(obj, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
 
 
 def _add_think_aliases(save_path: str) -> None:
@@ -204,9 +202,10 @@ def _add_think_aliases(save_path: str) -> None:
 def add_reasoning_aliases(save_path: str) -> None:
     """Retrofit the canonical 1.5 reasoning rewrites onto an existing tokenizer.
 
-    Installs the same rules the build recipe does: <think>/</think> aliased to
-    the <|inner_prefix|>/<|inner_suffix|> delimiters (flipping the targets to
-    normalized=True), then the REASONING_CLEANUP_RULES prepended in front.
+    Installs the same rules the build recipe does:
+    <think>/</think> aliased to the <|inner_prefix|>/<|inner_suffix|> delimiters,
+    which flips the targets to normalized=True,
+    then REASONING_CLEANUP_RULES prepended in front.
     Idempotent; raises ValueError if a delimiter is not an added token.
     """
     _add_think_aliases(save_path)
@@ -268,7 +267,7 @@ def prepare_apertus_1p5_text_base(
             t for t in state["added_tokens"] if t["id"] not in DEMOTED_TOKEN_IDS
         ]
 
-    _rewrite_backend_state(output_path, _apply_text_renames)
+    rewrite_backend_state(output_path, _apply_text_renames)
     for token_id, (old, new) in TEXT_RENAMES.items():
         print(f"  Renamed id {token_id}: {old} -> {new}")
     print(f"  Demoted ids {DEMOTED_TOKEN_IDS} from added tokens")
@@ -294,32 +293,28 @@ def prepare_apertus_1p5_text_base(
     return output_path
 
 
-def _finalize_apertus_1p5(output_path: str) -> None:
-    """Write the derived files in their canonical, deterministic form."""
+def _finalize_apertus_1p5(output_path: str, save_mode: str) -> None:
+    """Apply the final edits and write the files with save_tokenizer_files."""
+    state = load_backend_state(output_path)
     # The original artifact swapped the names of audio slots 13/14 by string
     # replacement, leaving the alias-ready normalized=true flag behind at
     # slot 14 (<|stt_translate|>). The stray flag is harmless and kept as-is;
     # the <|audio|> side of the swap was repaired in the canonical artifact
     # (see module docstring), and the pipeline already builds it repaired.
-    def _keep_stt_flag_and_prepend_rules(state):
-        for entry in state["added_tokens"]:
-            if entry["content"] == "<|stt_translate|>":
-                entry["normalized"] = True
-        _prepend_rules(state, REASONING_CLEANUP_RULES)
+    for entry in state["added_tokens"]:
+        if entry["content"] == "<|stt_translate|>":
+            entry["normalized"] = True
+    _prepend_rules(state, REASONING_CLEANUP_RULES)
 
-    _rewrite_backend_state(output_path, _keep_stt_flag_and_prepend_rules)
-
-    config_path = os.path.join(output_path, "tokenizer_config.json")
-    with open(config_path, "r", encoding="utf-8") as f:
-        built = json.load(f)
-
-    chat_template = built.pop("chat_template", None)
-    if chat_template is None:
+    with open(os.path.join(output_path, "tokenizer_config.json"), encoding="utf-8") as f:
+        config = json.load(f)
+    if "chat_template" not in config:
         raise ValueError("Pipeline did not produce a chat template.")
-    with open(os.path.join(output_path, "chat_template.jinja"), "w",
-              encoding="utf-8") as f:
-        f.write(chat_template)
 
+    # An explicit allowlist: the artifact must not inherit save_pretrained's
+    # shape. Left out on purpose: the added_tokens_decoder mirror (24MB of
+    # duplication) and the backend/is_local/local_files_only keys that
+    # transformers 4.x cannot load.
     carried_keys = (
         "add_prefix_space", "added_tokens_count", "audio_begin_token",
         "audio_end_token", "audio_tokenizer", "base_vocab_size", "bos_token",
@@ -329,36 +324,23 @@ def _finalize_apertus_1p5(output_path: str) -> None:
         "sft_user_begin_sequence", "unk_token", "vision_begin_token",
         "vision_end_token", "vision_tokenizer",
     )
-    config = {key: built[key] for key in carried_keys}
-    config.update(EXTRA_SPECIAL_TOKENS)
-    config.update({
-        # The base stops on <|assistant_end|>; 1.5 ends sequences with the
-        # plain </s> terminator and keeps the turn/tool stops in
-        # generation_config.
-        "eos_token": "</s>",
-        "extra_special_tokens": dict(EXTRA_SPECIAL_TOKENS),
-        "processor_class": "Apertus1p5Processor",
-        "tokenizer_class": "PreTrainedTokenizerFast",
-        # Canonical quirk: the base text vocab size, not the true total.
-        "vocab_size": BASE_VOCAB_SIZE,
-    })
-    _dump_canonical_json(config, config_path)
-
-    def _token_entry(content: str) -> dict[str, Any]:
-        return {
-            "content": content,
-            "lstrip": False,
-            "normalized": False,
-            "rstrip": False,
-            "single_word": False,
-        }
-
-    _dump_canonical_json(
-        {
-            name: _token_entry(config[name])
-            for name in ("bos_token", "eos_token", "pad_token", "unk_token")
+    save_tokenizer_files(
+        output_path,
+        state,
+        config,
+        mode=save_mode,
+        config_keys=carried_keys,
+        overrides={
+            **EXTRA_SPECIAL_TOKENS,
+            # The base stops on <|assistant_end|>; 1.5 ends sequences with the
+            # plain </s> terminator and keeps the turn/tool stops in
+            # generation_config.
+            "eos_token": "</s>",
+            "extra_special_tokens": dict(EXTRA_SPECIAL_TOKENS),
+            "processor_class": "Apertus1p5Processor",
+            # Canonical quirk: the base text vocab size, not the true total.
+            "vocab_size": BASE_VOCAB_SIZE,
         },
-        os.path.join(output_path, "special_tokens_map.json"),
     )
 
 
@@ -395,6 +377,7 @@ def build_apertus_1p5(
     revision: str | None = BASE_REVISION,
     chat_template_file: str | None = None,
     work_dir: str | None = None,
+    save_mode: str = "compatible",
 ) -> str:
     """Build the canonical Apertus 1.5 tokenizer from the Apertus 1 base.
 
@@ -407,6 +390,9 @@ def build_apertus_1p5(
             chat_templates/Apertus_1p5/chat_template.jinja in this repo.
         work_dir: Where to keep the intermediate stage directories (useful for
             debugging). A temporary directory is used and removed by default.
+        save_mode: "compatible" writes the canonical files; "current_version"
+            writes them with the installed transformers' save_pretrained
+            (see omnitok.io.save_tokenizer_files).
 
     Returns:
         output_path.
@@ -444,7 +430,7 @@ def build_apertus_1p5(
         create_instruct_tokenizer(
             audio_dir, None, output_path, chat_template_file=chat_template_file
         )
-        _finalize_apertus_1p5(output_path)
+        _finalize_apertus_1p5(output_path, save_mode)
         _verify_apertus_1p5(output_path)
     finally:
         if stages_tmp is not None:
@@ -452,3 +438,8 @@ def build_apertus_1p5(
 
     print(f"\nApertus 1.5 tokenizer written to {output_path}")
     return output_path
+
+
+def build_from_parent(parent: str | os.PathLike, output: str | os.PathLike) -> None:
+    """Registry recipe for Apertus_1p5: build from a local Apertus 1 base."""
+    build_apertus_1p5(os.fspath(output), base_tokenizer_path=os.fspath(parent))

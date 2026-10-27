@@ -21,7 +21,7 @@ After adding modality tokens, ``tokenizer.vocab_size`` still returns the
 original text-only size (e.g. 131072).  Always use ``len(tokenizer)`` or
 ``len(tokenizer.get_vocab())`` to get the true total.
 
-Call flow (driven by builder.add_modality):
+Call flow (driven by builder._assemble, shared by both entry points):
 
     save_tokenizer()              # save HF tokenizer + write base metadata
     rename_reserved_tokens()      # e.g. <|RESERVED_OMNI_001|> -> <|img_start|>
@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import tempfile
 from typing import Any, Callable, Sequence
 
 from huggingface_hub import snapshot_download
@@ -79,7 +80,7 @@ def _resolve_tokenizer_path(tokenizer_path: str, revision: str | None = None) ->
 # ── Token manipulation ───────────────────────────────────────────────────────
 
 
-def _rewrite_backend_state(
+def rewrite_backend_state(
     save_path: str, mutate: Callable[[dict[str, Any]], None]
 ) -> None:
     """Round-trip tokenizer.json through the backend, applying ``mutate``.
@@ -88,10 +89,40 @@ def _rewrite_backend_state(
     edit raises instead of writing a corrupt file, and the serialization
     stays identical to what the backend itself writes.
     """
-    path = os.path.join(save_path, "tokenizer.json")
-    state = json.loads(Tokenizer.from_file(path).to_str())
+    state = load_backend_state(save_path)
     mutate(state)
+    save_backend_state(state, os.path.join(save_path, "tokenizer.json"))
+
+
+def load_backend_state(save_path: str) -> dict[str, Any]:
+    """The tokenizer.json state of ``save_path``, as the backend serializes it."""
+    path = os.path.join(save_path, "tokenizer.json")
+    return json.loads(Tokenizer.from_file(path).to_str())
+
+
+def save_backend_state(state: dict[str, Any], path: str) -> None:
+    """Write a tokenizer.json state through the backend.
+
+    The backend parses ``state`` first, so a malformed state raises instead of
+    being written, and the file comes out exactly as a tokenizers save would
+    write it; loading and saving it again reproduces the bytes.
+    """
     Tokenizer.from_str(json.dumps(state)).save(path, pretty=True)
+
+
+def assert_droppable_post_processor(state: dict[str, Any], declared: set[str]) -> None:
+    """Refuse post-processor shapes that are not safe to drop.
+
+    Only a TemplateProcessing over the tokenizer's own declared bos/eos
+    is droppable; anything else encodes behaviour the caller did not
+    ask to lose.
+    """
+    if state is None:
+        return
+    if state.get("type") != "TemplateProcessing" or not (
+        set(state.get("special_tokens", {})) <= declared
+    ):
+        raise ValueError(f"unrecognized post-processor: {state.get('type')}")
 
 
 def rename_reserved_tokens(
@@ -99,13 +130,12 @@ def rename_reserved_tokens(
 ) -> None:
     """Rename tokens in the saved tokenizer files on disk; ids never move.
 
-    tokenizer.json is rewritten structurally (vocab keys and added-token
-    contents); the tokenizer_config.json and special_tokens_map.json mirrors
-    swap exactly-equal string values. Old tokens missing from the vocabulary
-    are skipped.
+    tokenizer.json is rewritten structurally, in vocab keys and added-token
+    contents; the tokenizer_config.json and special_tokens_map.json mirrors
+    swap exactly-equal string values.
+    Old tokens missing from the vocabulary are skipped.
 
-    Used to turn placeholders like <|RESERVED_OMNI_001|> into real names
-    like <|img_start|>.
+    Used to turn placeholders like <|RESERVED_OMNI_001|> into real names.
 
     Note: modifies files on disk, not the in-memory tokenizer object.
     Reload from disk after renaming to get the updated vocabulary.
@@ -138,7 +168,7 @@ def rename_reserved_tokens(
             if entry["content"] in present:
                 entry["content"] = present[entry["content"]]
 
-    _rewrite_backend_state(save_path, _rename)
+    rewrite_backend_state(save_path, _rename)
 
     def _replace(obj):
         if isinstance(obj, dict):
@@ -197,7 +227,7 @@ def prepend_normalizer_rules(
     added token. Rules already present are not duplicated. Operates directly
     on ``tokenizer.json``.
     """
-    _rewrite_backend_state(save_path, lambda state: _prepend_rules(state, rules))
+    rewrite_backend_state(save_path, lambda state: _prepend_rules(state, rules))
     print(f"  Prepended {len(rules)} normalizer rules")
 
 
@@ -355,6 +385,105 @@ def mark_tokens_non_special(
 # ── Tokenizer config ─────────────────────────────────────────────────────────
 
 
+def dump_canonical_json(obj: dict[str, Any], path: str) -> None:
+    """transformers-style deterministic JSON: sorted keys, indent 2, LF tail."""
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(json.dumps(obj, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
+
+
+_SPECIAL_TOKEN_ROLES = ("bos_token", "eos_token", "pad_token", "unk_token")
+
+
+SAVE_MODES = ("compatible", "current_version")
+
+# The files save_tokenizer_files owns: stale copies in the output are removed.
+TOKENIZER_FILES = (
+    "tokenizer.json", "tokenizer_config.json", "special_tokens_map.json",
+    "chat_template.jinja", "added_tokens.json",
+)
+
+# Never carried by a compatible config: the added-token mirror transformers 4.x
+# writes, and the keys of transformers 5.x saves.
+_DROPPED_CONFIG_KEYS = ("added_tokens_decoder", "backend", "is_local", "local_files_only")
+
+
+def save_tokenizer_files(
+    output: str | os.PathLike,
+    state: dict[str, Any],
+    config: dict[str, Any],
+    *,
+    mode: str = "compatible",
+    config_keys: Sequence[str] | None = None,
+    overrides: dict[str, Any] | None = None,
+) -> None:
+    """Write a tokenizer's files: the last step of every recipe.
+
+    ``state`` is the tokenizer.json content and ``config`` the
+    tokenizer_config.json content; a ``chat_template`` in it is written to
+    chat_template.jinja. The config keeps ``config_keys`` if given, else every
+    key but the added-token mirror and 5.x-only keys, then takes ``overrides``,
+    with ``tokenizer_class: PreTrainedTokenizerFast`` by default.
+
+    ``compatible`` (the default) writes the same bytes on every supported
+    transformers/tokenizers version, loadable by transformers 4.x and 5.x:
+    tokenizer.json through the tokenizers backend, the config as sorted JSON,
+    and a special-tokens map with only the role tokens.
+
+    ``current_version`` writes the same tokenizer with the installed
+    transformers' ``save_pretrained``: its native format, which other major
+    versions may not load (a 5.x save does not load on 4.x).
+    """
+    if mode not in SAVE_MODES:
+        raise ValueError(f"save mode must be one of {SAVE_MODES}, got {mode!r}")
+    config = dict(config)
+    chat_template = config.pop("chat_template", None)
+    if config_keys is None:
+        config = {k: v for k, v in config.items() if k not in _DROPPED_CONFIG_KEYS}
+    else:
+        config = {key: config[key] for key in config_keys}
+    config.update({"tokenizer_class": "PreTrainedTokenizerFast", **(overrides or {})})
+
+    output = os.fspath(output)
+    os.makedirs(output, exist_ok=True)
+    for name in TOKENIZER_FILES:
+        if os.path.exists(os.path.join(output, name)):
+            os.remove(os.path.join(output, name))
+    if mode == "compatible":
+        _write_compatible(output, state, config, chat_template)
+        return
+    with tempfile.TemporaryDirectory() as compatible:
+        _write_compatible(compatible, state, config, chat_template)
+        AutoTokenizer.from_pretrained(compatible).save_pretrained(output)
+
+
+def _write_compatible(
+    output: str,
+    state: dict[str, Any],
+    config: dict[str, Any],
+    chat_template: str | None,
+) -> None:
+    save_backend_state(state, os.path.join(output, "tokenizer.json"))
+    dump_canonical_json(config, os.path.join(output, "tokenizer_config.json"))
+    dump_canonical_json(
+        {
+            name: {
+                "content": config[name],
+                "lstrip": False,
+                "normalized": False,
+                "rstrip": False,
+                "single_word": False,
+            }
+            for name in _SPECIAL_TOKEN_ROLES
+            if name in config
+        },
+        os.path.join(output, "special_tokens_map.json"),
+    )
+    if chat_template is not None:
+        with open(os.path.join(output, "chat_template.jinja"), "w",
+                  encoding="utf-8") as f:
+            f.write(chat_template)
+
+
 def write_tokenizer_config(
     save_path: str,
     tokenizer,
@@ -395,8 +524,7 @@ def write_tokenizer_config(
         else:
             config.pop("omnimodal_config", None)
 
-    with open(config_path, "w", encoding="utf-8") as f:
-        f.write(json.dumps(config, indent=2))
+    dump_canonical_json(config, config_path)
 
 
 def save_tokenizer(
@@ -473,11 +601,20 @@ def detect_existing_modalities(tokenizer_path: str) -> dict[str, Any]:
 # ── Omnimodal config ──────────────────────────────────────────────────────────
 
 
-def read_modality_info(mc: ModalityConfig, vocab: dict[str, int]) -> dict[str, Any] | None:
+def read_modality_info(
+    mc: ModalityConfig,
+    vocab: dict[str, int],
+    *,
+    publish_structure_ids: bool = False,
+) -> dict[str, Any] | None:
     """Derive a single modality's summary from the tokenizer vocabulary.
 
-    Returns {name, offset, vocab_size, start_token, end_token} or None
-    if the modality's content or structure tokens are not in the vocabulary.
+    Returns {name, offset, vocab_size, start_token, end_token},
+    plus structure_token_ids when ``publish_structure_ids`` is set.
+    Returns None if the modality's tokens are not in the vocabulary.
+
+    The Apertus 1.5 artifact predates structure_token_ids,
+    so the map stays off unless a recipe asks for it.
     Walks the content tokens from index 0, verifying id = offset + index as it counts them —
     every config this feeds is only written for contiguous ids,
     which is what lets consumers look tokens up by offset arithmetic.
@@ -508,19 +645,28 @@ def read_modality_info(mc: ModalityConfig, vocab: dict[str, int]) -> dict[str, A
             f"{count} are contiguous from index 0"
         )
 
-    return {
+    info = {
         "name": mc.name,
         "offset": offset,
         "vocab_size": count,
         "start_token": start_id,
         "end_token": end_id,
     }
+    if publish_structure_ids:
+        info["structure_token_ids"] = {
+            r.target_name: vocab[r.target_name]
+            for r in mc.structure_tokens
+            if r.target_name in vocab
+        }
+    return info
 
 
 def build_omnimodal_config(
     base_vocab_size: int,
     tokenizer,
     registry: dict[str, ModalityConfig] | None = None,
+    *,
+    publish_structure_ids: bool = False,
 ) -> dict[str, Any]:
     """Build omnimodal_config for every registered modality present in the tokenizer.
 
@@ -543,7 +689,9 @@ def build_omnimodal_config(
     modalities = [
         info
         for mc in registry.values()
-        if (info := read_modality_info(mc, vocab)) is not None
+        if (info := read_modality_info(
+            mc, vocab, publish_structure_ids=publish_structure_ids
+        )) is not None
     ]
 
     if not modalities:

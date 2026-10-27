@@ -6,8 +6,8 @@
 # live in this repo. validate_model.sh consumes these manifests.
 #
 # Run from the repo root: bash validation/gen_checksums.sh
-# CI regenerates and `git diff --exit-code`s the result, so the manifests can
-# never silently drift from the checked-in tokenizers.
+# CI regenerates them and fails if `git status` shows any change or new file,
+# so the manifests can never silently drift from the checked-in tokenizers.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -50,3 +50,13 @@ gen_manifest Apertus_1 \
   tokenizer.json           tokenizers/Apertus_1/tokenizer.json \
   tokenizer_config.json    tokenizers/Apertus_1/tokenizer_config.json \
   special_tokens_map.json  tokenizers/Apertus_1/special_tokens_map.json
+
+gen_manifest Apertus_2 \
+  tokenizer.json           tokenizers/Apertus_2/tokenizer.json \
+  tokenizer_config.json    tokenizers/Apertus_2/tokenizer_config.json \
+  special_tokens_map.json  tokenizers/Apertus_2/special_tokens_map.json
+
+gen_manifest Apertus_2_instruct \
+  tokenizer.json           tokenizers/Apertus_2_instruct/tokenizer.json \
+  tokenizer_config.json    tokenizers/Apertus_2_instruct/tokenizer_config.json \
+  special_tokens_map.json  tokenizers/Apertus_2_instruct/special_tokens_map.json

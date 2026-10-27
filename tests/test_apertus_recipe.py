@@ -1,51 +1,17 @@
-"""The Apertus 1.5 build recipe reproduces the canonical artifact.
+"""The Apertus 1.5 recipe: parents it accepts and the base it refuses.
 
-The whole point of this repo: running `build_apertus_1p5` on the Apertus 1
-base yields the canonical Apertus 1.5 tokenizer (tokenizers/Apertus_1p5)
-byte-for-byte, as pinned by the md5 manifest under validation/. The build runs
-offline from the checked-in copy of the base under tokenizers/Apertus_1.
+The byte-for-byte rebuild of tokenizers/Apertus_1p5 from its registered
+parent (tokenizers/Apertus_1_base) is checked in tests/test_registry.py.
 """
 
-import hashlib
 from pathlib import Path
 
 import pytest
 
-from omnitok import build_apertus_1p5, prepare_apertus_1p5_text_base
+from omnitok import prepare_apertus_1p5_text_base, registry
+from omnitok.recipes.apertus_1p5 import build_from_parent
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-MANIFEST = REPO_ROOT / "validation" / "Apertus_1p5.md5"
-BASE_DIR = REPO_ROOT / "tokenizers" / "Apertus_1"
-
-
-def _md5(path: Path) -> str:
-    return hashlib.md5(path.read_bytes()).hexdigest()
-
-
-@pytest.fixture(scope="module")
-def built_1p5(tmp_path_factory):
-    out = tmp_path_factory.mktemp("apertus_1p5_build") / "Apertus_1p5"
-    build_apertus_1p5(str(out), base_tokenizer_path=str(BASE_DIR))
-    return out
-
-
-def test_build_matches_canonical_manifest(built_1p5):
-    """Every file pinned in validation/Apertus_1p5.md5 is reproduced exactly."""
-    manifest = {}
-    for line in MANIFEST.read_text().splitlines():
-        digest, name = line.split()
-        manifest[name] = digest
-    assert manifest, "empty manifest"
-
-    built = {name: _md5(built_1p5 / name) for name in manifest}
-    mismatches = {
-        name: (built[name], digest)
-        for name, digest in manifest.items()
-        if built[name] != digest
-    }
-    assert not mismatches, (
-        f"Built files diverge from the canonical Apertus 1.5: {mismatches}"
-    )
 
 
 def test_wrong_base_is_rejected(tmp_path):
@@ -57,3 +23,14 @@ def test_wrong_base_is_rejected(tmp_path):
             str(REPO_ROOT / "tokenizers" / "Apertus_1p5"),
             str(tmp_path / "never_finished"),
         )
+
+
+def test_rebuild_from_the_instruct_mirror_matches(tmp_path):
+    """The 1.0 instruct tokenizer (Apertus_1) builds the same bytes as the
+    registered base parent; the recipe is parent-agnostic between them."""
+    output = tmp_path / "Apertus_1p5"
+    build_from_parent(registry.artifact_dir("Apertus_1"), output)
+    expected = registry.committed_files("Apertus_1p5")
+    assert {p.name for p in output.iterdir()} == set(expected)
+    for name, path in expected.items():
+        assert (output / name).read_bytes() == path.read_bytes(), name
