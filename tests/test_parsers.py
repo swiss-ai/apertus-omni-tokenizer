@@ -138,3 +138,162 @@ def test_tool_parser_parses_tool_call(tokenizer):
     # Both modes present.
     assert callable(parser.extract_tool_calls)
     assert callable(parser.extract_tool_calls_streaming)
+
+
+# --------------------------------------------------------------------------- #
+# Reasoning parser logic (swiss-ai/apertus-program#1134). Runs everywhere: with
+# real vLLM when installed, otherwise against tests/_vllm_stub.py. The parser
+# must work with any chat template -- released (prompt ends at
+# <|assistant_start|>), fixes 1-3 (prompt ends at <|tool_output_end|> after a
+# tool result) and the variant that opens the thinking section in the prompt --
+# because parser and template roll out independently.
+# --------------------------------------------------------------------------- #
+
+VOCAB = {
+    "<|inner_prefix|>": 32,
+    "<|inner_suffix|>": 33,
+    "<|user_end|>": 65,
+    "<|assistant_start|>": 66,
+    "<|assistant_end|>": 68,
+    "<|tools_prefix|>": 72,
+    "<|tools_suffix|>": 73,
+}
+CALL = '<|tools_prefix|>[{"get_weather": {"city": "Bern"}}]<|tools_suffix|>'
+# Prompt endings, as token ids.
+PROMPT_NEW_TURN = [65, 66]  # released template, or thinking off
+PROMPT_THINKING_OPEN = [65, 66, 32]  # template opens the thinking section
+PROMPT_AFTER_CALL_IN_THINKING = [66, 32, 7, 72, 8, 73, 9]  # tool output, turn continues
+PROMPT_AFTER_CLOSED_THINKING = [66, 32, 7, 33, 72, 8, 73, 9]
+
+
+class _FakeTokenizer:
+    def get_vocab(self):
+        return dict(VOCAB)
+
+
+class _Request:
+    def __init__(self, after_tool=False):
+        self.messages = [{"role": "user", "content": "Weather in Bern?"}]
+        if after_tool:
+            self.messages.append({"role": "tool", "content": '{"temp": 18}'})
+        self.chat_template_kwargs = {"enable_thinking": True}
+
+
+@pytest.fixture
+def make_parser():
+    """Load the reasoning parser against real vLLM, or the stub with sys.modules
+    restored afterwards (so the live tests above still skip without vLLM)."""
+    import importlib.util as iu
+    import sys
+
+    saved = None
+    if iu.find_spec("vllm") is None:
+        sys.path.insert(0, os.path.dirname(__file__))
+        import _vllm_stub
+
+        saved = {k: v for k, v in sys.modules.items() if k == "vllm" or k.startswith("vllm.")}
+        _vllm_stub.install()
+    try:
+        mod = _load(REASONING_PARSER, "apertus_reasoning_parser_logic")
+    finally:
+        if saved is not None:
+            for k in [k for k in sys.modules if k == "vllm" or k.startswith("vllm.")]:
+                del sys.modules[k]
+            sys.modules.update(saved)
+
+    def make(prompt_ids=None):
+        parser = mod.ApertusReasoningParser(_FakeTokenizer())
+        if prompt_ids is not None:
+            parser.set_prompt_token_ids(prompt_ids)
+        return parser
+
+    return make
+
+
+def test_answer_without_thinking_is_content_on_released_template(make_parser):
+    """The bug of the first tool-aware parser: with thinking on but a template
+    that does not open the section, a direct answer must not become reasoning."""
+    for prompt in (PROMPT_NEW_TURN, None):  # recent vLLM / vLLM without prompt ids
+        r, c = make_parser(prompt).extract_reasoning("Hello! How can I help?", _Request())
+        assert r is None and c == "Hello! How can I help?"
+
+
+def test_call_inside_thinking_reaches_content(make_parser):
+    """Problem 4: a call made inside an unclosed thinking section is content."""
+    for prompt in (PROMPT_NEW_TURN, None):
+        r, c = make_parser(prompt).extract_reasoning("<|inner_prefix|>Need the weather." + CALL, _Request())
+        assert r == "Need the weather." and c == CALL
+
+
+def test_thinking_opened_by_prompt(make_parser):
+    parser = make_parser(PROMPT_THINKING_OPEN)
+    r, c = parser.extract_reasoning("Need the weather." + CALL, _Request())
+    assert r == "Need the weather." and c == CALL
+    r, c = parser.extract_reasoning("Short think.<|inner_suffix|>It is 18 degrees.", _Request())
+    assert r == "Short think." and c == "It is 18 degrees."
+
+
+def test_thinking_opened_by_prompt_without_prompt_ids(make_parser):
+    """Older vLLM passes no prompt ids: a reasoning end still splits correctly,
+    and output with no markers is content (a thought may show, nothing is hidden)."""
+    parser = make_parser(None)
+    r, c = parser.extract_reasoning("Short think.<|inner_suffix|>It is 18 degrees.", _Request())
+    assert r == "Short think." and c == "It is 18 degrees."
+    r, c = parser.extract_reasoning("Need the weather." + CALL, _Request())
+    assert r is None and c == "Need the weather." + CALL
+
+
+def test_unclosed_answer_after_tool_result_is_content(make_parser):
+    for prompt in (PROMPT_AFTER_CALL_IN_THINKING, PROMPT_AFTER_CLOSED_THINKING, None):
+        r, c = make_parser(prompt).extract_reasoning("It is 18 degrees in Bern.", _Request(after_tool=True))
+        assert r is None and c == "It is 18 degrees in Bern."
+
+
+def test_prompt_state(make_parser):
+    parser = make_parser()
+    assert parser.is_reasoning_end(PROMPT_THINKING_OPEN) is False
+    assert parser.is_reasoning_end(PROMPT_AFTER_CALL_IN_THINKING) is False
+    # Undecided after a turn boundary: the reply may open thinking itself.
+    assert parser.is_reasoning_end(PROMPT_NEW_TURN) is False
+    assert parser.is_reasoning_end([66, 32, 7, 33]) is True
+    for prompt, is_open in ((PROMPT_NEW_TURN, False), (PROMPT_THINKING_OPEN, True),
+                            (PROMPT_AFTER_CALL_IN_THINKING, True), (PROMPT_AFTER_CLOSED_THINKING, False)):
+        streaming = make_parser()
+        streaming.adjust_initial_state_from_prompt(prompt)
+        assert streaming.open_from_prompt is is_open
+        assert make_parser(prompt).open_from_prompt is is_open
+
+
+def test_streaming_released_template(make_parser):
+    """Prompt ends at a turn boundary: plain text streams as content, a thinking
+    section the model opens itself streams as reasoning, a call ends reasoning."""
+    parser = make_parser()
+    parser.adjust_initial_state_from_prompt(PROMPT_NEW_TURN)
+    assert parser.extract_reasoning_streaming("", "Hi", "Hi", [], [7], [7]).content == "Hi"
+    thinking = make_parser()
+    thinking.adjust_initial_state_from_prompt(PROMPT_NEW_TURN)
+    assert thinking.extract_reasoning_streaming("", "<|inner_prefix|>", "<|inner_prefix|>", [], [32], [32]) is None
+    delta = thinking.extract_reasoning_streaming("<|inner_prefix|>", "<|inner_prefix|>Need", "Need", [32], [32, 7], [7])
+    assert delta.reasoning == "Need" and delta.content is None
+    split = thinking.extract_reasoning_streaming(
+        "<|inner_prefix|>Need", "<|inner_prefix|>Need<|tools_prefix|>", "<|tools_prefix|>", [32, 7], [32, 7, 72], [72]
+    )
+    assert split.reasoning is None and split.content == "<|tools_prefix|>"
+    assert thinking.is_reasoning_end_streaming([32, 7, 72], [72]) is True
+    assert thinking.extract_content_ids([32, 7, 72, 9]) == [72, 9]
+
+
+def test_streaming_with_thinking_opened_by_prompt(make_parser):
+    parser = make_parser()
+    parser.adjust_initial_state_from_prompt(PROMPT_THINKING_OPEN)
+    first = parser.extract_reasoning_streaming("", "Need", "Need", [], [7], [7])
+    assert first.reasoning == "Need" and first.content is None
+    split = parser.extract_reasoning_streaming("Need", "Need<|tools_prefix|>", "<|tools_prefix|>", [7], [7, 72], [72])
+    assert split.reasoning is None and split.content == "<|tools_prefix|>"
+
+
+def test_streaming_fallback_promotes_unclosed_answer_after_tool(make_parser):
+    parser = make_parser()
+    assert parser.get_streaming_fallback_content("It is 18 degrees.", _Request(after_tool=True)) == "It is 18 degrees."
+    assert parser.get_streaming_fallback_content("Still thinking", _Request()) is None
+    assert parser.get_streaming_fallback_content("x" + CALL, _Request(after_tool=True)) is None
