@@ -67,6 +67,33 @@ Both cover **both serving modes**:
 | tool | `extract_tool_calls` | `extract_tool_calls_streaming` |
 | reasoning | `extract_reasoning` | `extract_reasoning_streaming` (token-id based) |
 
+## Tool calls inside thinking (swiss-ai/apertus-program#1134)
+
+Apertus 1.5 calls tools inside its thinking section, so a reply that calls a
+tool ends with `<|tools_prefix|>[...]<|tools_suffix|>` and never emits the
+reasoning-end token. The reasoning parser treats `<|tools_prefix|>` like the
+end token: the text before it is reasoning, the call is content and reaches the
+tool parser. This works in both serving modes; before, a streamed call made
+without thinking reached the client as raw `<|tools_prefix|>[...]` text. After a
+tool result, an answer the model does not close is content.
+
+**Chat-template independent.** The parser and the chat template are rolled out
+separately (vLLM releases vs. model repos), so the parser works with every 1.5
+template: the released one, the one with the #1134 fixes, and one that opens the
+thinking section in the prompt. It learns whether the prompt left a thinking
+section open from the prompt **token ids** (`set_prompt_token_ids` in recent
+vLLM, `adjust_initial_state_from_prompt` when streaming), never from the request.
+Where vLLM passes neither, output without reasoning tokens is content: a thought
+may show up as content, but an answer or a call is never hidden in `reasoning`.
+
+Based on Imanol Schlag's parser in
+[swiss-ai/apertus-tool-use-thinking-demo](https://github.com/swiss-ai/apertus-tool-use-thinking-demo).
+That version decided from `enable_thinking` in the request that the prompt
+opened the thinking section, which is only true for a patched template; with
+the released template (or fixes 1-3 only) it returned direct answers as
+`reasoning` with empty `content`. His tolerant tool parser (calls written as
+`<invoke>` XML or `{"name": ..., "arguments": ...}` JSON) is not included yet.
+
 ## Tokenizer-scheme note (why the reasoning parser is "handle both")
 
 The model always emits reasoning-start/end at **ids 32/33**, but the *string*

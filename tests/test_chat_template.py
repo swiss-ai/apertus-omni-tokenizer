@@ -175,6 +175,56 @@ def test_tool_call_arguments_render_the_same_as_string_or_dict():
 
 
 # ---------------------------------------------------------------------------
+# Tool calls in the 1.5 template (swiss-ai/apertus-program#1134): calls without
+# arguments, non-string defaults, and no new turn after a tool result.
+# ---------------------------------------------------------------------------
+
+
+def _render_1p5(messages, tools=None, **kwargs) -> str:
+    tok = _make_tokenizer(open(_APERTUS_1P5, encoding="utf-8").read())
+    return tok.apply_chat_template(messages, tokenize=False, tools=tools or _weather_tools(),
+                                   add_generation_prompt=True, **kwargs)
+
+
+def test_call_without_arguments_renders():
+    """A call without arguments reaches the template as {}; it must render, not raise."""
+    msgs = _multi_turn_messages({})
+    assert '[{"get_weather": {}}]' in _render_1p5(msgs)
+
+
+def test_enum_parameter_with_integer_default_renders():
+    """A non-string default is written as JSON instead of failing on str + int."""
+    tools = [{"type": "function", "function": {"name": "set_timer", "description": "Set a timer.", "parameters": {
+        "type": "object", "properties": {"minutes": {"type": "integer", "enum": [5, 10, 15], "default": 10}}}}}]
+    assert "minutes?: number, // default: 10" in _render_1p5([{"role": "user", "content": "Set a timer."}], tools)
+
+
+def test_prompt_after_tool_result_continues_the_turn():
+    """After a tool result the generation prompt ends at the tool output, so the model continues its own turn."""
+    rendered = _render_1p5(_multi_turn_messages('{"city": "Zurich"}'))
+    assert rendered.endswith("<|tool_output_start|>14C light rain<|tool_output_end|>")
+
+
+def test_tool_without_description_renders():
+    """A tool with no description (optional in the OpenAI schema) must render, not fail on str + None."""
+    tools = [{"type": "function", "function": {"name": "f", "parameters": {"type": "object", "properties": {}}}}]
+    rendered = _render_1p5([{"role": "user", "content": "hi"}], tools)
+    assert "type f = " in rendered
+
+
+def test_prompt_after_tool_outputs_block_continues_the_turn():
+    """The block-format assistant content (tool_outputs block) also ends the prompt at the tool output."""
+    msgs = [
+        {"role": "user", "content": "What is the weather in Zurich?"},
+        {"role": "assistant", "content": {"blocks": [
+            {"type": "tool_calls", "calls": [{"name": "get_weather", "arguments": {"city": "Zurich"}}]},
+            {"type": "tool_outputs", "outputs": [{"output": "14C, light rain"}]},
+        ]}},
+    ]
+    assert _render_1p5(msgs).endswith("<|tool_output_start|>14C, light rain<|tool_output_end|>")
+
+
+# ---------------------------------------------------------------------------
 # Meta-tests: guard the guards.
 #
 # Deliberately broken templates (tests/examples/) are fed through the SAME
