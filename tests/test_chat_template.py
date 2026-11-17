@@ -225,6 +225,83 @@ def test_prompt_after_tool_outputs_block_continues_the_turn():
 
 
 # ---------------------------------------------------------------------------
+# Standard OpenAI message shapes in the 1.5 template (follow-up to
+# swiss-ai/apertus-program#1134). vLLM with --chat-template-content-format
+# string never sends these, but Transformers users call apply_chat_template
+# directly: an assistant tool call without content, and text content parts in
+# system and assistant messages. Each must render like its string form.
+# ---------------------------------------------------------------------------
+
+
+def _with_assistant_content(messages: list[dict], **content) -> list[dict]:
+    """The same conversation with the assistant's ``content`` key replaced, or dropped when not given."""
+    out = []
+    for m in messages:
+        if m["role"] == "assistant":
+            m = {k: v for k, v in m.items() if k != "content"} | content
+        out.append(m)
+    return out
+
+
+@pytest.mark.parametrize("content", [{}, {"content": None}], ids=["missing", "null"])
+def test_tool_call_without_content_renders_like_empty_content(content):
+    """A tool call with no content (or content: null) renders like content ""; it must not raise."""
+    msgs = _multi_turn_messages({"city": "Zurich"})
+    assert _render_1p5(_with_assistant_content(msgs, **content)) == _render_1p5(msgs)
+
+
+def test_second_tool_call_without_content_closes_the_tool_output():
+    """A contentless call right after a tool result first closes that result, as content "" does."""
+    msgs = _multi_turn_messages({"city": "Zurich"})
+    msgs += [dict(msgs[1], tool_calls=[{"id": "call_2", "type": "function",
+                                        "function": {"name": "get_weather", "arguments": {"city": "Bern"}}}]),
+             {"role": "tool", "tool_call_id": "call_2", "content": "9C fog"}]
+    rendered = _render_1p5(_with_assistant_content(msgs, content=None))
+    assert rendered == _render_1p5(msgs)
+    assert '14C light rain<|tool_output_end|><|tools_prefix|>[{"get_weather": {"city": "Bern"}}]' in rendered
+
+
+@pytest.mark.parametrize("message", [{"role": "assistant"}, {"role": "assistant", "content": None}],
+                         ids=["missing", "null"])
+def test_assistant_message_without_content_or_tool_calls_still_raises(message):
+    with pytest.raises(jinja2.exceptions.TemplateError, match="Invalid assistant message"):
+        _render_1p5([{"role": "user", "content": "hi"}, message])
+
+
+def _parts(*texts: str) -> list[dict]:
+    return [{"type": "text", "text": t} for t in texts]
+
+
+def test_system_text_parts_render_like_a_string():
+    user = {"role": "user", "content": "hi"}
+    as_parts = _render_1p5([{"role": "system", "content": _parts("Be brief. ", "Answer in German.")}, user])
+    assert as_parts == _render_1p5([{"role": "system", "content": "Be brief. Answer in German."}, user])
+
+
+def test_assistant_text_parts_render_like_a_string():
+    def convo(content):
+        return [{"role": "user", "content": "hi"}, {"role": "assistant", "content": content},
+                {"role": "user", "content": "and now?"}]
+    assert _render_1p5(convo(_parts("Hello! ", "How can I help?"))) == _render_1p5(convo("Hello! How can I help?"))
+
+
+def test_assistant_text_parts_with_tool_calls_render_like_a_string():
+    msgs = _multi_turn_messages({"city": "Zurich"})
+    msgs[1]["content"] = "Let me check."
+    assert _render_1p5(_with_assistant_content(msgs, content=_parts("Let me check."))) == _render_1p5(msgs)
+
+
+@pytest.mark.parametrize("role", ["system", "assistant"])
+def test_non_text_parts_outside_user_messages_raise(role):
+    """Images and audio are only placed in user turns; elsewhere the part type is named in the error."""
+    msgs = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": [{"type": "image"}]}]
+    if role == "system":
+        msgs = [{"role": "system", "content": [{"type": "image"}]}, msgs[0]]
+    with pytest.raises(jinja2.exceptions.TemplateError, match=f"Invalid {role} part: image"):
+        _render_1p5(msgs)
+
+
+# ---------------------------------------------------------------------------
 # Meta-tests: guard the guards.
 #
 # Deliberately broken templates (tests/examples/) are fed through the SAME

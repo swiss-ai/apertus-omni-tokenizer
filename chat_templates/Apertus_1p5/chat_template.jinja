@@ -168,6 +168,16 @@
             {{ system_token + messages[0].content + end_system_token }}
         {%- elif messages[0].content is mapping and "text" in messages[0].content -%}
             {{ system_token + messages[0].content.text + end_system_token }}
+        {%- elif messages[0].content is not string and messages[0].content is not mapping and messages[0].content is iterable -%}
+            {{ system_token }}
+            {%- for part in messages[0].content -%}
+                {%- if part.type == "text" -%}
+                    {{ part.text }}
+                {%- else -%}
+                    {{- raise_exception("Invalid system part: " + part.type) -}}
+                {%- endif -%}
+            {%- endfor -%}
+            {{ end_system_token }}
         {%- else -%}
             {{- raise_exception("Invalid system message") -}}
         {%- endif -%}
@@ -244,7 +254,7 @@
             {{ assistant_token }}
             {%- set ns.in_assistant = true -%}
         {%- endif -%}
-        {%- if "content" in message -%}
+        {%- if "content" in message and message.content is not none -%}
             {%- if message.content is string and (ns.assistant_format is none or ns.assistant_format == "string") -%}
                 {%- if ns.in_tool -%}
                     {{ tool_output_end_token }}
@@ -252,6 +262,19 @@
                 {%- endif -%}
                 {%- set ns.assistant_format = "string" -%}
                 {{ message.content }}
+            {%- elif message.content is not string and message.content is not mapping and message.content is iterable and (ns.assistant_format is none or ns.assistant_format == "string") -%}
+                {%- if ns.in_tool -%}
+                    {{ tool_output_end_token }}
+                    {%- set ns.in_tool = false -%}
+                {%- endif -%}
+                {%- set ns.assistant_format = "string" -%}
+                {%- for part in message.content -%}
+                    {%- if part.type == "text" -%}
+                        {{ part.text }}
+                    {%- else -%}
+                        {{- raise_exception("Invalid assistant part: " + part.type) -}}
+                    {%- endif -%}
+                {%- endfor -%}
             {%- elif message.content is mapping and "blocks" in message.content and (ns.assistant_format is none or ns.assistant_format == "mapping") -%}
                 {%- set ns.assistant_format = "mapping" -%}
                 {%- set blocks = message.content.blocks -%}
@@ -321,6 +344,12 @@
             {%- else -%}
                 {{- raise_exception("Invalid assistant content") -}}
             {%- endif -%}
+        {%- elif "tool_calls" in message and message.tool_calls and (ns.assistant_format is none or ns.assistant_format == "string") -%}
+            {%- if ns.in_tool -%}
+                {{ tool_output_end_token }}
+                {%- set ns.in_tool = false -%}
+            {%- endif -%}
+            {%- set ns.assistant_format = "string" -%}
         {%- else -%}
             {{- raise_exception("Invalid assistant message") -}}
         {%- endif -%}
