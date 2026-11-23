@@ -160,7 +160,7 @@
 {%- set image_token = '<|image|>' -%}
 {%- set audio_token = '<|audio|>' -%}
 
-{%- set ns = namespace(in_assistant=false, in_tool=false, in_inner=false, waiting_for_tool_outputs=false, assistant_format=none, last_block_tool_output=false) -%}
+{%- set ns = namespace(in_assistant=false, in_tool=false, in_inner=false, waiting_for_tool_outputs=false, assistant_format=none, last_block_tool_output=false, follows_tool_output=false) -%}
 
 {%- if messages and messages[0].role == 'system' -%}
     {%- if "content" in messages[0] -%}
@@ -205,12 +205,20 @@
 
 {%- for message in loop_messages -%}
     {%- set ns.last_block_tool_output = false -%}
+    {#- Close an open tool output before the next message writes anything. An assistant
+        message with an empty block list and no tool calls writes nothing, so it leaves
+        the tool output open, as if the message were not there. -#}
+    {%- set ns.follows_tool_output = ns.in_tool -%}
+    {%- set writes_nothing = message.role == 'assistant'
+        and "content" in message and message.content is mapping
+        and "blocks" in message.content and not message.content.blocks
+        and not ("tool_calls" in message and message.tool_calls) -%}
+    {%- if ns.in_tool and message.role != 'tool' and not writes_nothing -%}
+        {{ tool_output_end_token }}
+        {%- set ns.in_tool = false -%}
+    {%- endif -%}
     {%- if message.role == 'user' -%}
         {%- set ns.in_inner = false -%}
-        {%- if ns.in_tool -%}
-            {{ tool_output_end_token }}
-            {%- set ns.in_tool = false -%}
-        {%- endif -%}
         {%- if ns.in_assistant -%}
             {{ end_assistant_token }}
             {%- set ns.in_assistant = false -%}
@@ -256,17 +264,9 @@
         {%- endif -%}
         {%- if "content" in message and message.content is not none -%}
             {%- if message.content is string and (ns.assistant_format is none or ns.assistant_format == "string") -%}
-                {%- if ns.in_tool -%}
-                    {{ tool_output_end_token }}
-                    {%- set ns.in_tool = false -%}
-                {%- endif -%}
                 {%- set ns.assistant_format = "string" -%}
                 {{ message.content }}
             {%- elif message.content is not string and message.content is not mapping and message.content is iterable and (ns.assistant_format is none or ns.assistant_format == "string") -%}
-                {%- if ns.in_tool -%}
-                    {{ tool_output_end_token }}
-                    {%- set ns.in_tool = false -%}
-                {%- endif -%}
                 {%- set ns.assistant_format = "string" -%}
                 {%- for part in message.content -%}
                     {%- if part.type == "text" -%}
@@ -281,10 +281,6 @@
                 {%- for block in blocks -%}
                     {%- if block.type == 'thoughts' -%}
                         {%- set ns.last_block_tool_output = false -%}
-                        {%- if ns.in_tool -%}
-                            {{ tool_output_end_token }}
-                            {%- set ns.in_tool = false -%}
-                        {%- endif -%}
                         {%- if not ns.in_inner -%}
                             {%- set ns.in_inner = true -%}
                             {{ inner_token }}
@@ -292,10 +288,6 @@
                         {{ block.text }}
                     {%- elif block.type == 'tool_calls' -%}
                         {%- set ns.last_block_tool_output = false -%}
-                        {%- if ns.in_tool -%}
-                            {{ tool_output_end_token }}
-                            {%- set ns.in_tool = false -%}
-                        {%- endif -%}
                         {%- if ns.in_inner and not loop.first and block.calls|length == 1 and block.calls[0].name == 'display_answers' -%}
                             {%- set ns.in_inner = false -%}
                             {{ outer_token }}
@@ -313,7 +305,7 @@
                         {{ ']' + end_tool_calls_token }}
                         {%- set ns.waiting_for_tool_outputs = true -%}
                     {%- elif block.type == 'tool_outputs' -%}
-                        {%- if ns.in_tool -%}
+                        {%- if ns.follows_tool_output and loop.first -%}
                             {{- raise_exception("Cannot have both tool outputs as separate messages and tool outputs as blocks") -}}
                         {%- endif -%}
                         {{ tool_output_start_token }}
@@ -328,10 +320,6 @@
                         {%- set ns.last_block_tool_output = true -%}
                     {%- elif block.type == 'response' -%}
                         {%- set ns.last_block_tool_output = false -%}
-                        {%- if ns.in_tool -%}
-                            {{ tool_output_end_token }}
-                            {%- set ns.in_tool = false -%}
-                        {%- endif -%}
                         {%- if (not loop.first and ns.in_inner) or (ns.in_assistant and ns.in_inner) -%}
                             {%- set ns.in_inner = false -%}
                             {{ outer_token }}
@@ -345,10 +333,6 @@
                 {{- raise_exception("Invalid assistant content") -}}
             {%- endif -%}
         {%- elif "tool_calls" in message and message.tool_calls and (ns.assistant_format is none or ns.assistant_format == "string") -%}
-            {%- if ns.in_tool -%}
-                {{ tool_output_end_token }}
-                {%- set ns.in_tool = false -%}
-            {%- endif -%}
             {%- set ns.assistant_format = "string" -%}
         {%- else -%}
             {{- raise_exception("Invalid assistant message") -}}
