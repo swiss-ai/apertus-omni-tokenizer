@@ -249,7 +249,15 @@ class ApertusReasoningParser(BaseThinkingReasoningParser):
 
     def get_streaming_fallback_content(self, previous_text, request):
         """The stream ended inside the reasoning phase: after a tool result, text
-        with no reasoning start and no call is the model's answer."""
-        if not _after_tool(request) or self.start_token in previous_text or TOOLS_PREFIX in previous_text:
+        with no reasoning start and no call is the model's answer. vLLM appends
+        the returned text to the content, so return it only when it was streamed
+        as reasoning (the prompt left thinking open); on a fresh turn it already
+        went out as content and would be sent twice."""
+        if (
+            not self.open_from_prompt
+            or not _after_tool(request)
+            or self.start_token in previous_text
+            or TOOLS_PREFIX in previous_text
+        ):
             return None
         return previous_text.replace(self.end_token, "").strip() or None
