@@ -23,6 +23,13 @@ text before ``<|tools_prefix|>`` is reasoning and the call is content, so the
 tool parser sees it (problem 4 of the issue). In streaming, ``<|tools_prefix|>``
 ends the reasoning phase like the end token does.
 
+Forced tool calls. With ``tool_choice`` "required" or a named tool, vLLM
+constrains the output to JSON once reasoning has ended and reads the content
+back as JSON, without the tool parser. The model writes ``<|tools_prefix|>``
+first (that is what ends reasoning here), so for these requests the content is
+the JSON alone, without ``<|tools_prefix|>``/``<|tools_suffix|>``. Otherwise
+"required" returns no call and a named call gets the marker in its arguments.
+
 Independent of the chat template. A template may leave the thinking section open
 at the end of the prompt (``enable_thinking`` in the patched 1.5 template) or not
 (the released template). The parser never guesses this from the request; it uses
@@ -72,6 +79,7 @@ _CANDIDATE_PAIRS = (
 )
 
 TOOLS_PREFIX = "<|tools_prefix|>"
+TOOLS_SUFFIX = "<|tools_suffix|>"
 # A turn boundary after the last reasoning start means the prompt is not inside
 # a thinking section (e.g. "<|assistant_start|>" with thinking off).
 TURN_MARKERS = (
@@ -101,6 +109,24 @@ def _get(message, key):
     return message.get(key) if isinstance(message, dict) else getattr(message, key, None)
 
 
+def _forced_tool_call(request) -> bool:
+    """``tool_choice`` is "required" or names a tool. vLLM then constrains the
+    output to JSON and reads the content back as JSON, not through the tool
+    parser, so the content must be the JSON alone."""
+    choice = _get(request, "tool_choice")
+    return choice is not None and choice not in ("auto", "none")
+
+
+def _call_json(content):
+    """The JSON of a forced call, without the Apertus call markers."""
+    content = (content or "").strip()
+    if content.startswith(TOOLS_PREFIX):
+        content = content[len(TOOLS_PREFIX) :]
+    if content.endswith(TOOLS_SUFFIX):
+        content = content[: -len(TOOLS_SUFFIX)]
+    return content.strip() or None
+
+
 def _after_tool(request) -> bool:
     messages = getattr(request, "messages", None) or []
     return bool(messages) and _get(messages[-1], "role") == "tool"
@@ -118,6 +144,15 @@ class ApertusReasoningParser(BaseThinkingReasoningParser):
         self.turn_ids = {self.vocab[t] for t in TURN_MARKERS if t in self.vocab}
         # True only when the prompt token ids show an open thinking section.
         self.open_from_prompt = False
+        # True when the request forces a tool call (see _forced_tool_call).
+        self.forced_tool_call = False
+
+    def adjust_request(self, request):
+        # Recent vLLM passes the request here before generation; the streaming
+        # methods never see it.
+        self.forced_tool_call = _forced_tool_call(request)
+        parent = getattr(super(), "adjust_request", None)
+        return parent(request) if parent is not None else request
 
     def _pick_pair(self) -> tuple:
         # self.vocab is set by the base __init__ before start_token is read.
@@ -167,6 +202,15 @@ class ApertusReasoningParser(BaseThinkingReasoningParser):
     # ---- non-streaming ----
 
     def extract_reasoning(self, model_output, request):
+        reasoning, content = self._split(model_output, request)
+        if self.forced_tool_call or _forced_tool_call(request):
+            # The model writes <|tools_prefix|> before the constrained JSON
+            # (the constraint starts where reasoning ends); vLLM needs the JSON.
+            index = (content or "").find(TOOLS_PREFIX)
+            content = _call_json(content[index:]) if index >= 0 else content
+        return reasoning, content
+
+    def _split(self, model_output, request):
         start, end = self.start_token, self.end_token
         opened_here = start in model_output
         if not opened_here and self.open_from_prompt:
@@ -201,7 +245,8 @@ class ApertusReasoningParser(BaseThinkingReasoningParser):
         if self.end_token_id in input_ids:
             return input_ids[input_ids.index(self.end_token_id) + 1 :]
         if self.tools_prefix_id is not None and self.tools_prefix_id in input_ids:
-            return input_ids[input_ids.index(self.tools_prefix_id) :]
+            index = input_ids.index(self.tools_prefix_id)
+            return input_ids[index + 1 if self.forced_tool_call else index :]
         return []
 
     def extract_reasoning_streaming(
@@ -226,7 +271,13 @@ class ApertusReasoningParser(BaseThinkingReasoningParser):
         if in_thinking and self.end_token_id not in delta_token_ids and TOOLS_PREFIX in delta_text:
             head, _, tail = delta_text.partition(TOOLS_PREFIX)
             head = head.replace(self.start_token, "")
+            if self.forced_tool_call:
+                return DeltaMessage(reasoning=head or None, content=tail or None)
             return DeltaMessage(reasoning=head or None, content=TOOLS_PREFIX + tail)
+        if self.forced_tool_call and not in_thinking and TOOLS_PREFIX in delta_text:
+            # Outside thinking the text before the call is content, and vLLM
+            # takes this delta's content as the start of the call JSON.
+            return DeltaMessage(content=delta_text.partition(TOOLS_PREFIX)[2] or None)
         if (
             self.open_from_prompt
             and self.start_token_id not in previous_token_ids

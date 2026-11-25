@@ -342,3 +342,94 @@ def test_streamed_unclosed_answer_after_tool_reaches_content_when_prompt_opened_
     reasoning, content = _stream_like_vllm(parser, ANSWER, _Request(after_tool=True))
     assert content == "".join(ANSWER)
     assert reasoning == "".join(ANSWER)
+
+
+# ---- forced tool calls (tool_choice "required" or a named tool) ----
+# vLLM constrains the output to JSON once reasoning has ended and reads the
+# content back as JSON, so the content must not carry the Apertus call markers.
+
+REQUIRED_JSON = '[{"name": "get_weather", "parameters": {"city": "Bern"}}]'
+NAMED_JSON = '{"city": "Bern"}'
+NAMED_CHOICE = {"type": "function", "function": {"name": "get_weather"}}
+
+
+def _forced(tool_choice, **kwargs):
+    request = _Request(**kwargs)
+    request.tool_choice = tool_choice
+    return request
+
+
+@pytest.mark.parametrize(
+    "tool_choice, call_json", [("required", REQUIRED_JSON), (NAMED_CHOICE, NAMED_JSON)], ids=["required", "named"]
+)
+@pytest.mark.parametrize("via_adjust_request", [True, False], ids=["adjust_request", "request_only"])
+def test_forced_call_content_is_json_only(make_parser, tool_choice, call_json, via_adjust_request):
+    request = _forced(tool_choice)
+    for prompt_ids, output, reasoning in [
+        (PROMPT_NEW_TURN, "<|tools_prefix|>" + call_json, None),
+        (PROMPT_NEW_TURN, "<|tools_prefix|>" + call_json + "<|tools_suffix|>", None),
+        (PROMPT_THINKING_OPEN, "Bern, so I call the tool.<|tools_prefix|>" + call_json, "Bern, so I call the tool."),
+        (PROMPT_THINKING_OPEN, "Easy.<|inner_suffix|>" + call_json, "Easy."),
+        (PROMPT_NEW_TURN, call_json, None),
+    ]:
+        parser = make_parser(prompt_ids)
+        if via_adjust_request:
+            assert parser.adjust_request(request) is request
+        assert parser.extract_reasoning(output, request) == (reasoning, call_json), output
+
+
+def test_forced_call_drops_text_before_the_call_outside_thinking(make_parser):
+    """vLLM discards the content of a forced call anyway; the arguments must be JSON."""
+    parser = make_parser(PROMPT_NEW_TURN)
+    output = "I'll check the weather.<|tools_prefix|>" + NAMED_JSON
+    assert parser.extract_reasoning(output, _forced(NAMED_CHOICE)) == (None, NAMED_JSON)
+
+
+@pytest.mark.parametrize("tool_choice", [None, "auto", "none"])
+def test_call_markers_stay_without_a_forced_call(make_parser, tool_choice):
+    request = _forced(tool_choice)
+    parser = make_parser(PROMPT_THINKING_OPEN)
+    parser.adjust_request(request)
+    assert parser.extract_reasoning("Thought." + CALL, request) == ("Thought.", CALL)
+
+
+def _stream_until_reasoning_ends(parser, chunks):
+    """vLLM's streaming loop up to the delta that ends reasoning: that delta's
+    content and extract_content_ids are what it hands to the forced-call reader."""
+    ids = {chunk: 100 + i for i, chunk in enumerate(dict.fromkeys(chunks))}
+    reasoning = content = previous_text = ""
+    previous_ids = []
+    for chunk in chunks:
+        delta_ids = [VOCAB.get(chunk, ids[chunk])]
+        delta = parser.extract_reasoning_streaming(
+            previous_text, previous_text + chunk, chunk, previous_ids, previous_ids + delta_ids, delta_ids
+        )
+        if parser.is_reasoning_end_streaming(previous_ids + delta_ids, delta_ids):
+            return reasoning + ((delta and delta.reasoning) or ""), content, (delta and delta.content) or "", parser.extract_content_ids(delta_ids)
+        if delta is not None:
+            reasoning += delta.reasoning or ""
+            content += delta.content or ""
+        previous_text, previous_ids = previous_text + chunk, previous_ids + delta_ids
+    raise AssertionError("reasoning never ended")
+
+
+@pytest.mark.parametrize(
+    "prompt_ids, chunks, reasoning",
+    [
+        (PROMPT_THINKING_OPEN, ["I", " call.", "<|tools_prefix|>", "[", "{"], "I call."),
+        (PROMPT_NEW_TURN, ["<|tools_prefix|>", "[", "{"], ""),
+    ],
+    ids=["thinking_open", "new_turn"],
+)
+def test_streamed_forced_call_starts_at_the_json(make_parser, prompt_ids, chunks, reasoning):
+    parser = make_parser(prompt_ids)
+    parser.adjust_request(_forced("required"))
+    got_reasoning, content, call_start, call_ids = _stream_until_reasoning_ends(parser, chunks)
+    assert (got_reasoning, content, call_start, call_ids) == (reasoning, "", "", [])
+
+
+def test_streamed_call_keeps_its_marker_without_a_forced_call(make_parser):
+    parser = make_parser(PROMPT_THINKING_OPEN)
+    parser.adjust_request(_forced("auto"))
+    _, _, call_start, call_ids = _stream_until_reasoning_ends(parser, ["I", " call.", "<|tools_prefix|>", "["])
+    assert call_start == "<|tools_prefix|>" and call_ids == [VOCAB["<|tools_prefix|>"]]
