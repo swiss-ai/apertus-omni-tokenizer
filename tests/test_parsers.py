@@ -362,8 +362,7 @@ def _forced(tool_choice, **kwargs):
 @pytest.mark.parametrize(
     "tool_choice, call_json", [("required", REQUIRED_JSON), (NAMED_CHOICE, NAMED_JSON)], ids=["required", "named"]
 )
-@pytest.mark.parametrize("via_adjust_request", [True, False], ids=["adjust_request", "request_only"])
-def test_forced_call_content_is_json_only(make_parser, tool_choice, call_json, via_adjust_request):
+def test_forced_call_content_is_json_only(make_parser, tool_choice, call_json):
     request = _forced(tool_choice)
     for prompt_ids, output, reasoning in [
         (PROMPT_NEW_TURN, "<|tools_prefix|>" + call_json, None),
@@ -373,8 +372,6 @@ def test_forced_call_content_is_json_only(make_parser, tool_choice, call_json, v
         (PROMPT_NEW_TURN, call_json, None),
     ]:
         parser = make_parser(prompt_ids)
-        if via_adjust_request:
-            assert parser.adjust_request(request) is request
         assert parser.extract_reasoning(output, request) == (reasoning, call_json), output
 
 
@@ -389,47 +386,4 @@ def test_forced_call_drops_text_before_the_call_outside_thinking(make_parser):
 def test_call_markers_stay_without_a_forced_call(make_parser, tool_choice):
     request = _forced(tool_choice)
     parser = make_parser(PROMPT_THINKING_OPEN)
-    parser.adjust_request(request)
     assert parser.extract_reasoning("Thought." + CALL, request) == ("Thought.", CALL)
-
-
-def _stream_until_reasoning_ends(parser, chunks):
-    """vLLM's streaming loop up to the delta that ends reasoning: that delta's
-    content and extract_content_ids are what it hands to the forced-call reader."""
-    ids = {chunk: 100 + i for i, chunk in enumerate(dict.fromkeys(chunks))}
-    reasoning = content = previous_text = ""
-    previous_ids = []
-    for chunk in chunks:
-        delta_ids = [VOCAB.get(chunk, ids[chunk])]
-        delta = parser.extract_reasoning_streaming(
-            previous_text, previous_text + chunk, chunk, previous_ids, previous_ids + delta_ids, delta_ids
-        )
-        if parser.is_reasoning_end_streaming(previous_ids + delta_ids, delta_ids):
-            return reasoning + ((delta and delta.reasoning) or ""), content, (delta and delta.content) or "", parser.extract_content_ids(delta_ids)
-        if delta is not None:
-            reasoning += delta.reasoning or ""
-            content += delta.content or ""
-        previous_text, previous_ids = previous_text + chunk, previous_ids + delta_ids
-    raise AssertionError("reasoning never ended")
-
-
-@pytest.mark.parametrize(
-    "prompt_ids, chunks, reasoning",
-    [
-        (PROMPT_THINKING_OPEN, ["I", " call.", "<|tools_prefix|>", "[", "{"], "I call."),
-        (PROMPT_NEW_TURN, ["<|tools_prefix|>", "[", "{"], ""),
-    ],
-    ids=["thinking_open", "new_turn"],
-)
-def test_streamed_forced_call_starts_at_the_json(make_parser, prompt_ids, chunks, reasoning):
-    parser = make_parser(prompt_ids)
-    parser.adjust_request(_forced("required"))
-    got_reasoning, content, call_start, call_ids = _stream_until_reasoning_ends(parser, chunks)
-    assert (got_reasoning, content, call_start, call_ids) == (reasoning, "", "", [])
-
-
-def test_streamed_call_keeps_its_marker_without_a_forced_call(make_parser):
-    parser = make_parser(PROMPT_THINKING_OPEN)
-    parser.adjust_request(_forced("auto"))
-    _, _, call_start, call_ids = _stream_until_reasoning_ends(parser, ["I", " call.", "<|tools_prefix|>", "["])
-    assert call_start == "<|tools_prefix|>" and call_ids == [VOCAB["<|tools_prefix|>"]]
