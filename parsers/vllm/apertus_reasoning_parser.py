@@ -23,6 +23,17 @@ text before ``<|tools_prefix|>`` is reasoning and the call is content, so the
 tool parser sees it (problem 4 of the issue). In streaming, ``<|tools_prefix|>``
 ends the reasoning phase like the end token does.
 
+Forced tool calls. With ``tool_choice`` "required" or a named tool, vLLM
+constrains the output to JSON once reasoning has ended and reads the content
+back as JSON, without the tool parser. The model writes ``<|tools_prefix|>``
+first (that is what ends reasoning here), so for these requests
+``extract_reasoning`` returns the JSON alone, without
+``<|tools_prefix|>``/``<|tools_suffix|>``. Otherwise "required" returns no call
+and a named call gets the marker in its arguments. Non-streaming only: the
+streaming methods do not get the request, and ``adjust_request`` runs on another
+parser instance (the renderer's), so a streamed named call still carries the
+marker in its arguments.
+
 Independent of the chat template. A template may leave the thinking section open
 at the end of the prompt (``enable_thinking`` in the patched 1.5 template) or not
 (the released template). The parser never guesses this from the request; it uses
@@ -72,6 +83,7 @@ _CANDIDATE_PAIRS = (
 )
 
 TOOLS_PREFIX = "<|tools_prefix|>"
+TOOLS_SUFFIX = "<|tools_suffix|>"
 # A turn boundary after the last reasoning start means the prompt is not inside
 # a thinking section (e.g. "<|assistant_start|>" with thinking off).
 TURN_MARKERS = (
@@ -99,6 +111,24 @@ def _pick_delimiter_pair(vocab) -> tuple:
 
 def _get(message, key):
     return message.get(key) if isinstance(message, dict) else getattr(message, key, None)
+
+
+def _forced_tool_call(request) -> bool:
+    """``tool_choice`` is "required" or names a tool. vLLM then constrains the
+    output to JSON and reads the content back as JSON, not through the tool
+    parser, so the content must be the JSON alone."""
+    choice = _get(request, "tool_choice")
+    return choice is not None and choice not in ("auto", "none")
+
+
+def _call_json(content):
+    """The JSON of a forced call, without the Apertus call markers."""
+    content = (content or "").strip()
+    if content.startswith(TOOLS_PREFIX):
+        content = content[len(TOOLS_PREFIX) :]
+    if content.endswith(TOOLS_SUFFIX):
+        content = content[: -len(TOOLS_SUFFIX)]
+    return content.strip() or None
 
 
 def _after_tool(request) -> bool:
@@ -167,6 +197,15 @@ class ApertusReasoningParser(BaseThinkingReasoningParser):
     # ---- non-streaming ----
 
     def extract_reasoning(self, model_output, request):
+        reasoning, content = self._split(model_output, request)
+        if _forced_tool_call(request):
+            # The model writes <|tools_prefix|> before the constrained JSON
+            # (the constraint starts where reasoning ends); vLLM needs the JSON.
+            index = (content or "").find(TOOLS_PREFIX)
+            content = _call_json(content[index:]) if index >= 0 else content
+        return reasoning, content
+
+    def _split(self, model_output, request):
         start, end = self.start_token, self.end_token
         opened_here = start in model_output
         if not opened_here and self.open_from_prompt:

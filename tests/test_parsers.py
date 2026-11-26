@@ -342,3 +342,48 @@ def test_streamed_unclosed_answer_after_tool_reaches_content_when_prompt_opened_
     reasoning, content = _stream_like_vllm(parser, ANSWER, _Request(after_tool=True))
     assert content == "".join(ANSWER)
     assert reasoning == "".join(ANSWER)
+
+
+# ---- forced tool calls (tool_choice "required" or a named tool) ----
+# vLLM constrains the output to JSON once reasoning has ended and reads the
+# content back as JSON, so the content must not carry the Apertus call markers.
+
+REQUIRED_JSON = '[{"name": "get_weather", "parameters": {"city": "Bern"}}]'
+NAMED_JSON = '{"city": "Bern"}'
+NAMED_CHOICE = {"type": "function", "function": {"name": "get_weather"}}
+
+
+def _forced(tool_choice, **kwargs):
+    request = _Request(**kwargs)
+    request.tool_choice = tool_choice
+    return request
+
+
+@pytest.mark.parametrize(
+    "tool_choice, call_json", [("required", REQUIRED_JSON), (NAMED_CHOICE, NAMED_JSON)], ids=["required", "named"]
+)
+def test_forced_call_content_is_json_only(make_parser, tool_choice, call_json):
+    request = _forced(tool_choice)
+    for prompt_ids, output, reasoning in [
+        (PROMPT_NEW_TURN, "<|tools_prefix|>" + call_json, None),
+        (PROMPT_NEW_TURN, "<|tools_prefix|>" + call_json + "<|tools_suffix|>", None),
+        (PROMPT_THINKING_OPEN, "Bern, so I call the tool.<|tools_prefix|>" + call_json, "Bern, so I call the tool."),
+        (PROMPT_THINKING_OPEN, "Easy.<|inner_suffix|>" + call_json, "Easy."),
+        (PROMPT_NEW_TURN, call_json, None),
+    ]:
+        parser = make_parser(prompt_ids)
+        assert parser.extract_reasoning(output, request) == (reasoning, call_json), output
+
+
+def test_forced_call_drops_text_before_the_call_outside_thinking(make_parser):
+    """vLLM discards the content of a forced call anyway; the arguments must be JSON."""
+    parser = make_parser(PROMPT_NEW_TURN)
+    output = "I'll check the weather.<|tools_prefix|>" + NAMED_JSON
+    assert parser.extract_reasoning(output, _forced(NAMED_CHOICE)) == (None, NAMED_JSON)
+
+
+@pytest.mark.parametrize("tool_choice", [None, "auto", "none"])
+def test_call_markers_stay_without_a_forced_call(make_parser, tool_choice):
+    request = _forced(tool_choice)
+    parser = make_parser(PROMPT_THINKING_OPEN)
+    assert parser.extract_reasoning("Thought." + CALL, request) == ("Thought.", CALL)
