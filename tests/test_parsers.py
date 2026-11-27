@@ -105,26 +105,6 @@ def test_reasoning_parser_splits_deliberation(tokenizer):
     assert callable(parser.extract_reasoning_streaming)
 
 
-def test_pick_delimiter_pair_handles_both_schemes():
-    """The 'handle both' requirement: pick <|inner_prefix|> on this repo's
-    tokenizer, but <think> when that is the pair at the emitted (lower) id."""
-    pytest.importorskip("vllm")
-    mod = _load(REASONING_PARSER, "apertus_reasoning_parser_pick")
-
-    # Repo scheme: only <|inner_prefix|>/<|inner_suffix|> present (id 32/33).
-    repo_vocab = {"<|inner_prefix|>": 32, "<|inner_suffix|>": 33}
-    assert mod._pick_delimiter_pair(repo_vocab) == ("<|inner_prefix|>", "<|inner_suffix|>")
-
-    # Deployed scheme: both present, but <think>/</think> are at the lower id.
-    deployed_vocab = {
-        "<|inner_prefix|>": 69,
-        "<|inner_suffix|>": 70,
-        "<think>": 32,
-        "</think>": 33,
-    }
-    assert mod._pick_delimiter_pair(deployed_vocab) == ("<think>", "</think>")
-
-
 def test_tool_parser_parses_tool_call(tokenizer):
     mod = _load(TOOL_PARSER, "apertus_tool_parser")
     parser = mod.ApertusToolParser(tokenizer)
@@ -167,8 +147,11 @@ PROMPT_AFTER_CLOSED_THINKING = [66, 32, 7, 33, 72, 8, 73, 9]
 
 
 class _FakeTokenizer:
+    def __init__(self, vocab=None):
+        self.vocab = VOCAB if vocab is None else vocab
+
     def get_vocab(self):
-        return dict(VOCAB)
+        return dict(self.vocab)
 
 
 class _Request:
@@ -201,8 +184,8 @@ def make_parser():
                 del sys.modules[k]
             sys.modules.update(saved)
 
-    def make(prompt_ids=None):
-        parser = mod.ApertusReasoningParser(_FakeTokenizer())
+    def make(prompt_ids=None, vocab=None):
+        parser = mod.ApertusReasoningParser(_FakeTokenizer(vocab))
         if prompt_ids is not None:
             parser.set_prompt_token_ids(prompt_ids)
         return parser
@@ -223,6 +206,39 @@ def test_call_inside_thinking_reaches_content(make_parser):
     for prompt in (PROMPT_NEW_TURN, None):
         r, c = make_parser(prompt).extract_reasoning("<|inner_prefix|>Need the weather." + CALL, _Request())
         assert r == "Need the weather." and c == CALL
+
+
+# Apertus 1 ids: <think>/</think> are tokens of their own, below the inner pair.
+APERTUS_1_VOCAB = {**VOCAB, "<|inner_prefix|>": 69, "<|inner_suffix|>": 70, "<think>": 32, "</think>": 33}
+
+
+def test_think_tags_do_not_delimit_reasoning(make_parser):
+    """Only <|inner_prefix|>/<|inner_suffix|> delimit reasoning, also when
+    <think>/</think> have the lower ids; <think>Answer</think> stays content."""
+    answer = "<think>Answer</think>"
+    parser = make_parser(vocab=APERTUS_1_VOCAB)
+    assert (parser.start_token_id, parser.end_token_id) == (69, 70)
+    assert parser.extract_reasoning("<|inner_prefix|>Thought<|inner_suffix|>" + answer, _Request()) == (
+        "Thought",
+        answer,
+    )
+    assert parser.extract_reasoning(answer, _Request()) == (None, answer)
+    assert parser.is_reasoning_end([69, 7, 70]) is True
+    assert parser.is_reasoning_end([32, 7, 33]) is False
+    assert parser.is_reasoning_end_streaming([69, 7, 70], [70]) is True
+
+    pieces = [("<|inner_prefix|>", 69), ("Thought", 7), ("<|inner_suffix|>", 70), ("<think>", 32), ("Answer", 8), ("</think>", 33)]
+    for chunks, expected in ((pieces, ("Thought", answer)), (pieces[3:], ("", answer))):
+        streaming = make_parser(vocab=APERTUS_1_VOCAB)
+        reasoning = content = text = ""
+        ids = []
+        for chunk, token_id in chunks:
+            delta = streaming.extract_reasoning_streaming(text, text + chunk, chunk, ids, ids + [token_id], [token_id])
+            if delta is not None:
+                reasoning += delta.reasoning or ""
+                content += delta.content or ""
+            text, ids = text + chunk, ids + [token_id]
+        assert (reasoning, content) == expected
 
 
 def test_thinking_opened_by_prompt(make_parser):

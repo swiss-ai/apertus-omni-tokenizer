@@ -56,9 +56,9 @@ Enable reasoning generation (Apertus's own chat-template switch) with
 ## What they parse
 
 - **Tool calls** — `<|tools_prefix|>[{"tool_name": {..args..}}, ...]<|tools_suffix|>`
-- **Reasoning** — the deliberation block between the reasoning start/end tokens
-  (ids 32/33), emitted as `<|inner_prefix|>…<|inner_suffix|>` **or**
-  `<think>…</think>` depending on the tokenizer build (see below).
+- **Reasoning** — the deliberation block `<|inner_prefix|>…<|inner_suffix|>`
+  (ids 32/33 in the Apertus 1.5 tokenizer). `<think>` does not delimit
+  reasoning (see below).
 
 Both cover **both serving modes**:
 
@@ -94,19 +94,27 @@ the released template (or fixes 1-3 only) it returned direct answers as
 `reasoning` with empty `content`. His tolerant tool parser (calls written as
 `<invoke>` XML or `{"name": ..., "arguments": ...}` JSON) is not included yet.
 
-## Tokenizer-scheme note (why the reasoning parser is "handle both")
+## `<think>` is not a reasoning delimiter
 
-The model always emits reasoning-start/end at **ids 32/33**, but the *string*
-those ids decode to differs across tokenizer builds:
+The parser delimits reasoning with `<|inner_prefix|>`/`<|inner_suffix|>` only.
+Ids in this repo's tokenizers:
 
-| | `<\|inner_prefix\|>` | `<think>` |
+| Tokenizer | `<\|inner_prefix\|>`/`<\|inner_suffix\|>` | `<think>`/`</think>` |
 |---|---|---|
-| this repo (`tokenizers/Apertus_1p5`) | id 32 (canonical) | — |
-| some deployed builds | id 69 | id 32 (emitted) |
+| `Apertus_1p5` | 32/33 | text normalized to 32/33; plain vocab entries at 69/70 |
+| `Apertus_1`, `Apertus_1_base` | 69/70 | 32/33 |
+| `Apertus_2` | 12/13 | 22/23 |
 
-`BaseThinkingReasoningParser` resolves the token id from the *string*, so
-`apertus_reasoning_parser.py` picks whichever candidate pair the loaded tokenizer
-exposes at the lower (emitted) id — working under either scheme with no edits.
+The parser used to pick whichever pair started at the lower id, so with an
+Apertus 1 tokenizer it took `<think>`, although the Apertus 1 chat template
+writes `<|inner_prefix|>`. On Apertus 1.5 it always took the inner pair, and
+the 8B and 70B served for swiss-ai/vllm#34 opened every reasoning section with
+32 and closed it with 33, never 69/70. A tokenizer without the inner pair, such
+as the internal `Apertus-v1p5-tool_output_toks-think_toks` build, now makes the
+parser fail at startup.
+
+Not fixed: when Apertus 1.5 mentions `<think>` tags in its output, it writes
+ids 32/33, which breaks the reasoning split (swiss-ai/apertus-program#1377).
 
 ## Reasoning delimiters are non-special (apertus-omni-tokenizer #5)
 
