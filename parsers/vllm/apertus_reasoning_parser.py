@@ -2,19 +2,11 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """vLLM reasoning parser for Apertus models.
 
-Apertus wraps its inner reasoning ("Deliberation") between a start/end pair of
-special tokens. Which *string* those tokens carry depends on the tokenizer
-build, but the model always emits the same low special-token **ids**:
-
-    id 32 = reasoning start,  id 33 = reasoning end
-
-The apertus-omni-tokenizer repo canonicalises these as
-``<|inner_prefix|>``/``<|inner_suffix|>`` (ids 32/33); some deployed builds
-additionally register ``<think>``/``</think>`` at ids 32/33 (with the
-``<|inner_*|>`` strings pushed to other ids). ``BaseThinkingReasoningParser``
-resolves the token id from the *string* via ``vocab.get(token)``, so this parser
-picks whichever candidate pair the loaded tokenizer actually exposes at the
-lower (emitted) id -- working across both tokenizer schemes without edits.
+Apertus wraps its inner reasoning ("Deliberation") in ``<|inner_prefix|>`` and
+``<|inner_suffix|>`` (ids 32/33 in the Apertus 1.5 tokenizer, whose normalizer
+also rewrites the text ``<think>``/``</think>`` to those ids). ``<think>`` and
+``</think>`` never delimit reasoning, not even in a tokenizer that has them as
+tokens of their own (Apertus 1, at ids 32/33).
 
 Tool calls inside thinking (swiss-ai/apertus-program#1134). Apertus 1.5 calls
 tools inside its thinking: a reply that calls a tool ends with
@@ -63,14 +55,7 @@ except ImportError:
     except ImportError:
         from vllm.entrypoints.openai.protocol import DeltaMessage
 
-# Candidate (start, end) delimiter pairs, in preference order. The parser uses
-# whichever pair the loaded tokenizer has, choosing the one whose start token
-# sits at the lower vocab id (the id the model was trained to emit).
-_CANDIDATE_PAIRS = (
-    ("<|inner_prefix|>", "<|inner_suffix|>"),
-    ("<think>", "</think>"),
-)
-
+INNER_PREFIX, INNER_SUFFIX = "<|inner_prefix|>", "<|inner_suffix|>"
 TOOLS_PREFIX = "<|tools_prefix|>"
 # A turn boundary after the last reasoning start means the prompt is not inside
 # a thinking section (e.g. "<|assistant_start|>" with thinking off).
@@ -81,20 +66,6 @@ TURN_MARKERS = (
     "<|system_end|>",
     "<|developer_end|>",
 )
-
-
-def _pick_delimiter_pair(vocab) -> tuple:
-    """Pick the (start, end) reasoning delimiter pair the tokenizer exposes,
-    preferring the pair whose start token sits at the lower vocab id (the id the
-    model was trained to emit). Falls back to the repo-canonical pair."""
-    present = sorted(
-        (vocab[start], start, end)
-        for start, end in _CANDIDATE_PAIRS
-        if start in vocab and end in vocab
-    )
-    if present:
-        return present[0][1], present[0][2]
-    return _CANDIDATE_PAIRS[0]
 
 
 def _get(message, key):
@@ -108,9 +79,9 @@ def _after_tool(request) -> bool:
 
 @ReasoningParserManager.register_module("apertus")
 class ApertusReasoningParser(BaseThinkingReasoningParser):
-    """Reasoning parser for the Apertus deliberation block (tokenizer-agnostic
-    across the ``<|inner_prefix|>`` and ``<think>`` delimiter schemes, and
-    chat-template-agnostic, see the module docstring)."""
+    """Reasoning parser for the Apertus deliberation block, delimited by
+    ``<|inner_prefix|>``/``<|inner_suffix|>`` (chat-template-agnostic, see the
+    module docstring)."""
 
     def __init__(self, tokenizer, *args, **kwargs):
         super().__init__(tokenizer, *args, **kwargs)
@@ -119,19 +90,15 @@ class ApertusReasoningParser(BaseThinkingReasoningParser):
         # True only when the prompt token ids show an open thinking section.
         self.open_from_prompt = False
 
-    def _pick_pair(self) -> tuple:
-        # self.vocab is set by the base __init__ before start_token is read.
-        return _pick_delimiter_pair(self.vocab)
-
     @property
     def start_token(self) -> str:
-        """Token that starts reasoning (resolved to the emitted id in __init__)."""
-        return self._pick_pair()[0]
+        """Token that starts reasoning."""
+        return INNER_PREFIX
 
     @property
     def end_token(self) -> str:
         """Token that ends reasoning."""
-        return self._pick_pair()[1]
+        return INNER_SUFFIX
 
     # ---- prompt state (from token ids, never from the request) ----
 
