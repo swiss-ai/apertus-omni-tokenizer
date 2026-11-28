@@ -323,6 +323,8 @@ _A, _AE = "<|assistant_start|>", "<|assistant_end|>"
 _U, _UE = "<|user_start|>", "<|user_end|>"
 _TO, _TOE = "<|tool_output_start|>", "<|tool_output_end|>"
 _INNER = "<|inner_prefix|>"
+# With thinking off, a new assistant turn starts with a thinking section that is already closed.
+_NO_THINKING = _INNER + "<|inner_suffix|>"
 
 
 def _calls(city: str) -> str:
@@ -448,23 +450,55 @@ def test_misplaced_tool_output_raises(messages, error):
 # With a generation prompt, a conversation that ends on a tool output stops
 # right after it, so the model continues its own turn. Anything written after
 # the tool output, including empty content, ends the turn and opens a new one.
+# These render with thinking off (the default), so the new turn starts with a
+# closed thinking section.
 _GENERATION_PROMPT = {
     "after_tool_result": (_STRING_OPEN, _OPEN + _TOE),
     "after_tool_results_in_a_row": (_STRING_OPEN + [_tool("r2")], _OPEN + ", r2" + _TOE),
     "after_tool_result_in_block_conversation": (_BLOCKS_OPEN, _OPEN + _TOE),
     "after_tool_outputs_block": ([_Q, _blocks(_block_calls("Zurich"), _block_outputs("r1"))], _OPEN + _TOE),
-    "after_answer": (_STRING_OPEN + [_assistant(content="done")], _OPEN + _TOE + "done" + _AE + _A),
-    "after_empty_string_content": (_STRING_OPEN + [_assistant(content="")], _OPEN + _TOE + _AE + _A),
+    "after_answer": (_STRING_OPEN + [_assistant(content="done")], _OPEN + _TOE + "done" + _AE + _A + _NO_THINKING),
+    "after_empty_string_content": (_STRING_OPEN + [_assistant(content="")], _OPEN + _TOE + _AE + _A + _NO_THINKING),
     "after_response_block": (
         [_Q, _blocks(_block_calls("Zurich"), _block_outputs("r1"), _response("done"))],
-        _OPEN + _TOE + "done" + _AE + _A),
-    "after_user": (_STRING_OPEN + [_U2], _OPEN + _TOE + _AE + _U + "u2" + _UE + _A),
+        _OPEN + _TOE + "done" + _AE + _A + _NO_THINKING),
+    "after_user": (_STRING_OPEN + [_U2], _OPEN + _TOE + _AE + _U + "u2" + _UE + _A + _NO_THINKING),
 }
 
 
 @pytest.mark.parametrize("messages, expected", _GENERATION_PROMPT.values(), ids=list(_GENERATION_PROMPT))
 def test_generation_prompt_after_tool_output(messages, expected):
     assert _tail(messages, add_generation_prompt=True) == expected
+
+
+def _prompt_end(enable_thinking=None, messages=None) -> str:
+    kwargs = {} if enable_thinking is None else {"enable_thinking": enable_thinking}
+    return _render_1p5(messages or [{"role": "user", "content": "q"}], **kwargs)
+
+
+@pytest.mark.parametrize("enable_thinking", [None, False], ids=["default", "off"])
+def test_new_turn_with_thinking_off_starts_with_a_closed_thinking_section(enable_thinking):
+    """The model then answers without thinking, and the server sees that thinking has ended."""
+    assert _prompt_end(enable_thinking).endswith(_UE + _A + _NO_THINKING)
+
+
+def test_new_turn_with_thinking_on_ends_at_the_assistant_token():
+    assert _prompt_end(True).endswith(_UE + _A)
+
+
+@pytest.mark.parametrize("enable_thinking", [None, False, True], ids=["default", "off", "on"])
+def test_prompt_after_tool_result_has_no_thinking_section(enable_thinking):
+    """The turn continues after a tool result, so nothing is added in either mode."""
+    assert _prompt_end(enable_thinking, _multi_turn_messages('{"city": "Zurich"}')).endswith(_TOE)
+
+
+@pytest.mark.parametrize("enable_thinking", [None, False, True], ids=["default", "off", "on"])
+def test_no_thinking_section_without_a_generation_prompt(enable_thinking):
+    kwargs = {} if enable_thinking is None else {"enable_thinking": enable_thinking}
+    tok = _make_tokenizer(open(_APERTUS_1P5, encoding="utf-8").read())
+    rendered = tok.apply_chat_template([{"role": "user", "content": "q"}], tokenize=False,
+                                       add_generation_prompt=False, **kwargs)
+    assert rendered.endswith(_UE)
 
 
 # An assistant message with an empty block list and no tool calls writes

@@ -388,5 +388,8 @@
     {%- endif -%}
     {%- if add_generation_prompt -%}
         {{ assistant_token }}
+        {%- if not (enable_thinking is defined and enable_thinking) -%}
+            {{ inner_token + outer_token }}
+        {%- endif -%}
     {%- endif -%}
 {%- endif -%}

@@ -86,6 +86,13 @@ vLLM, `adjust_initial_state_from_prompt` when streaming), never from the request
 Where vLLM passes neither, output without reasoning tokens is content: a thought
 may show up as content, but an answer or a call is never hidden in `reasoning`.
 
+**Thinking off.** With `enable_thinking` false or unset, the 1.5 template starts
+a new assistant turn with an empty, closed thinking section
+(`<|assistant_start|><|inner_prefix|><|inner_suffix|>`). The model then does not
+open a thinking section on its own, and vLLM sees from the prompt that reasoning
+has ended, so it enforces `response_format` and a forced `tool_choice` from the
+first token. With thinking on, the prompt ends at `<|assistant_start|>` as before.
+
 Based on Imanol Schlag's parser in
 [swiss-ai/apertus-tool-use-thinking-demo](https://github.com/swiss-ai/apertus-tool-use-thinking-demo).
 That version decided from `enable_thinking` in the request that the prompt

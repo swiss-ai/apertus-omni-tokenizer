@@ -140,7 +140,7 @@ VOCAB = {
 }
 CALL = '<|tools_prefix|>[{"get_weather": {"city": "Bern"}}]<|tools_suffix|>'
 # Prompt endings, as token ids.
-PROMPT_NEW_TURN = [65, 66]  # released template, or thinking off
+PROMPT_NEW_TURN = [65, 66]  # released template, or thinking on
 PROMPT_THINKING_OPEN = [65, 66, 32]  # template opens the thinking section
 PROMPT_AFTER_CALL_IN_THINKING = [66, 32, 7, 72, 8, 73, 9]  # tool output, turn continues
 PROMPT_AFTER_CLOSED_THINKING = [66, 32, 7, 33, 72, 8, 73, 9]
@@ -272,6 +272,8 @@ def test_prompt_state(make_parser):
     # Undecided after a turn boundary: the reply may open thinking itself.
     assert parser.is_reasoning_end(PROMPT_NEW_TURN) is False
     assert parser.is_reasoning_end([66, 32, 7, 33]) is True
+    # Thinking off: the template closes an empty thinking section after the turn start.
+    assert parser.is_reasoning_end(PROMPT_NEW_TURN + [32, 33]) is True
     for prompt, is_open in ((PROMPT_NEW_TURN, False), (PROMPT_THINKING_OPEN, True),
                             (PROMPT_AFTER_CALL_IN_THINKING, True), (PROMPT_AFTER_CLOSED_THINKING, False)):
         streaming = make_parser()
