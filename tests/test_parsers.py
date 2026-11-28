@@ -309,7 +309,52 @@ def test_streaming_with_thinking_opened_by_prompt(make_parser):
 
 
 def test_streaming_fallback_promotes_unclosed_answer_after_tool(make_parser):
-    parser = make_parser()
+    parser = make_parser(PROMPT_AFTER_CALL_IN_THINKING)
     assert parser.get_streaming_fallback_content("It is 18 degrees.", _Request(after_tool=True)) == "It is 18 degrees."
     assert parser.get_streaming_fallback_content("Still thinking", _Request()) is None
     assert parser.get_streaming_fallback_content("x" + CALL, _Request(after_tool=True)) is None
+
+
+def _stream_like_vllm(parser, chunks, request):
+    """Drive the parser the way vLLM's streaming loop does: every delta goes
+    through extract_reasoning_streaming while the reasoning phase is open, and
+    when the stream ends inside it, get_streaming_fallback_content is appended
+    to the content. Returns (reasoning, content) as a client would join them."""
+    ids = {chunk: 100 + i for i, chunk in enumerate(dict.fromkeys(chunks))}
+    reasoning = content = previous_text = ""
+    previous_ids, reasoning_ended = [], False
+    for chunk in chunks:
+        delta_ids = [VOCAB.get(chunk, ids[chunk])]
+        delta = parser.extract_reasoning_streaming(
+            previous_text, previous_text + chunk, chunk, previous_ids, previous_ids + delta_ids, delta_ids
+        )
+        if delta is not None:
+            reasoning += delta.reasoning or ""
+            content += delta.content or ""
+        reasoning_ended = reasoning_ended or parser.is_reasoning_end_streaming(previous_ids + delta_ids, delta_ids)
+        previous_text, previous_ids = previous_text + chunk, previous_ids + delta_ids
+    if not reasoning_ended:
+        content += parser.get_streaming_fallback_content(previous_text, request) or ""
+    return reasoning, content
+
+
+ANSWER = ["It", " is", " 18", " degrees."]
+
+
+@pytest.mark.parametrize("prompt_ids", [PROMPT_NEW_TURN, [66, 72, 8, 73, 9]], ids=["new_turn", "after_tool_output"])
+def test_streamed_answer_after_tool_is_sent_once(make_parser, prompt_ids):
+    """On a prompt that does not leave thinking open, the answer is streamed as
+    content; the fallback must not append it a second time."""
+    parser = make_parser(prompt_ids)
+    reasoning, content = _stream_like_vllm(parser, ANSWER, _Request(after_tool=True))
+    assert content == "".join(ANSWER)
+    assert reasoning == ""
+
+
+def test_streamed_unclosed_answer_after_tool_reaches_content_when_prompt_opened_thinking(make_parser):
+    """When the prompt left thinking open, the deltas are reasoning; the fallback
+    hands the same text to the client as the answer, once."""
+    parser = make_parser(PROMPT_AFTER_CALL_IN_THINKING)
+    reasoning, content = _stream_like_vllm(parser, ANSWER, _Request(after_tool=True))
+    assert content == "".join(ANSWER)
+    assert reasoning == "".join(ANSWER)
